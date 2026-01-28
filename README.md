@@ -4,7 +4,7 @@
 
 ## Shrisudhan Govindarajan, Daniel Rebain, Kwang Moo Yi, Andrea Tagliasacchi
 
-This repository contains the official implementation of [Radiant Foam: Real-Time Differentiable Ray Tracing](https://radfoam.github.io).
+This repository contains the official implementation of [Radiant Foam: Real-Time Differentiable Ray Tracing](https://radfoam.github.io) extended by View Dependend Opacity. :)
 
 The code includes scripts for training and evaluation, as well as a real-time viewer that can be used to visualize trained models, or optionally to observe the progression of models as they train. Everything in this repository is non-final and subject to change as the project is still being actively developed. **We encourage anyone citing our results to do as RadFoam (vx), where x is the version specified for those metrics in the paper or tagged to a commit on GitHub.** This should hopefully reduce confusion.
 
