@@ -650,6 +650,7 @@ class RadFoamScene(torch.nn.Module):
                     ],
                     
                     # VOD PARAMETERS
+                    sggx[i, 0],
                     sggx[i, 1],
                     sggx[i, 2],
                     sggx[i, 3],
@@ -658,7 +659,6 @@ class RadFoamScene(torch.nn.Module):
                     sggx[i, 6],
                     sggx[i, 7],
                     sggx[i, 8],
-                    sggx[i, 9],
                 )
             )
 
