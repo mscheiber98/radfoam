@@ -83,7 +83,16 @@ class RadFoamScene(torch.nn.Module):
         density = torch.zeros(
             self.num_init_points, 1, device=self.device, dtype=self.attr_dtype
         )
+        
+        
+        # INITIALIZE THE DENSITY PARAMETERS
         self.density = nn.Parameter(density[perm])
+        # initialize sggx matrix to zero
+        # our density computation should be: original density + view_vector_transpose * sggx matrix * view_vector
+        # so in the initial state the sggx matrix should contribute nothing to the density
+        sggx = torch.zeros(self.num_inint_points, 9, device=self.device)
+        sggx = sggx[perm]
+        self.sggx = nn.Parameter(sggx)
 
     def initialize_from_pcd(self, points, points_colors):
         points = points.to(self.device)
@@ -109,7 +118,7 @@ class RadFoamScene(torch.nn.Module):
             ],
             dim=0,
         ).to(self.device)
-
+        
         torch.cuda.empty_cache()
 
         self.triangulation = radfoam.Triangulation(primal_points)
@@ -123,6 +132,12 @@ class RadFoamScene(torch.nn.Module):
 
         self.density = nn.Parameter(primal_density)
         self.num_init_points = self.primal_points.shape[0]
+        
+        # VOD PARAMETERS
+        # sggx matrix is initialized to zero
+        sggx = torch.zeros(self.num_init_points, 9, dtype=self.attr_dtype)
+        sggx = sggx[perm]
+        self.sggx = nn.Parameter(sggx)
 
     def permute_points(self, permutation):
         optimizable_tensors = {}
