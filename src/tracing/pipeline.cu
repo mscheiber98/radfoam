@@ -12,6 +12,8 @@
 namespace radfoam {
 
 template <typename attr_scalar, int sh_degree, int block_size>
+// __restrict__ is a compiler hint that the memory is not aliased with other memory and allows the compiler to optimize the code
+// attr_scalar is the type of the attributes, sh_degree is the degree of the spherical harmonics, block_size is the number of threads per block
 __global__ void forward(TraceSettings settings,
                         const Vec3f *__restrict__ points,
                         const attr_scalar *__restrict__ attributes,
@@ -27,31 +29,61 @@ __global__ void forward(TraceSettings settings,
                         float *__restrict__ quantile_depths,
                         uint32_t *__restrict__ quantile_point_indices,
                         uint32_t *__restrict__ num_intersections,
-                        attr_scalar *__restrict__ point_contribution) {
+                        attr_scalar *__restrict__ point_contribution // holds an array of the contributions of the points to the final image)
+)
+                        {
 
+    //each thread works on one ray
     uint32_t thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (thread_idx >= num_rays)
         return;
 
+    // every color gets one set of spherical harmonics coefficients that describe the view dependent color
+    // the number of coefficients per degree is calculated by (1 + degree)²
     constexpr int sh_dim = 3 * (1 + sh_degree) * (1 + sh_degree);
-    constexpr int attr_memory_size = 1 + sh_dim;
+    // spherical harmonics + opacity + view dependent opacity (sggx matrix)
+    constexpr int attr_memory_size = sh_dim + 1 + 9;
 
+    //normalize ray direction
     Ray ray = rays[thread_idx];
     ray.direction /= ray.direction.norm();
 
+    //depth quantiles is the pointer to the beginnign of the depth_quantiles array
+    // by adding thread_idx * num_depth_quantiles it now points to the depth quantiles of the current ray
     const float *ray_depth_quantiles =
         depth_quantiles + thread_idx * num_depth_quantiles;
-
+    
+    //calculate the shperical harmonics coefficients given the view direction
     auto sh_coeffs = sh_coefficients<sh_degree>(ray.direction);
 
-    auto load_attributes = [&](uint32_t v_idx, Vec3f &rgb, float &s) {
+    //lambda function to load vertex attributes
+    auto load_attributes = [&](uint32_t v_idx, Vec3f &rgb, float &s, float &vod) {
         const attr_scalar *attr_ptr = attributes + v_idx * attr_memory_size;
-        s = (float)attr_ptr[attr_memory_size - 1];
+        s = (float)attr_ptr[attr_memory_size - 10];
+        //if density is larger than threshold, load color using spherical harmonics
         if (s > 1e-6f) {
             rgb = load_sh_as_rgb<attr_scalar, sh_degree>(sh_coeffs, attr_ptr);
         } else {
             rgb = Vec3f::Zero();
         }
+        //VOD Parameters - stored row-major: row1=[1,2,3], row2=[4,5,6], row3=[7,8,9]
+        const float sggx_1 = (float)attr_ptr[attr_memory_size -9];
+        const float sggx_2 = (float)attr_ptr[attr_memory_size -8];
+        const float sggx_3 = (float)attr_ptr[attr_memory_size -7];
+        const float sggx_4 = (float)attr_ptr[attr_memory_size -6];
+        const float sggx_5 = (float)attr_ptr[attr_memory_size -5];
+        const float sggx_6 = (float)attr_ptr[attr_memory_size -4];
+        const float sggx_7 = (float)attr_ptr[attr_memory_size -3];
+        const float sggx_8 = (float)attr_ptr[attr_memory_size -2];
+        const float sggx_9 = (float)attr_ptr[attr_memory_size -1];
+        Mat3f sggx;
+        // Initialize row-major: assign row by row
+        sggx.row(0) << sggx_1, sggx_2, sggx_3;
+        sggx.row(1) << sggx_4, sggx_5, sggx_6;
+        sggx.row(2) << sggx_7, sggx_8, sggx_9;
+        //calculate the view dependent density for the point and the ray view direction
+        // w^T * S * w
+        vod = ray.direction.transpose() * sggx * ray.direction;
     };
 
     float transmittance = 1.0f;
@@ -63,33 +95,52 @@ __global__ void forward(TraceSettings settings,
         current_quantile = ray_depth_quantiles[current_quantile_idx];
     }
 
+    // calculate Volume Rendering equation for one constant piece, i.e. one cell
     auto functor = [&](uint32_t point_idx,
-                       float t_0,
-                       float t_1,
+                       float t_0, //entry point in the current voronoi cell (encoded in distance along the ray)
+                       float t_1, //exit point from the current voronoi cell
                        const Vec3f &current_point,
                        const Vec3f &next_point) {
         Vec3f rgb_primal;
         float s_primal;
+        // VOD PARAMETERS
+        float vod;
 
-        load_attributes(point_idx, rgb_primal, s_primal);
-
+        load_attributes(point_idx, rgb_primal, s_primal, vod);
+        
+        //SEE VOLUME RENDERING EQUATION PIECEWISE CONSTANT IN RADFOAM PAPER
+        //Transmittance is variable T in the formula
+        //delta
         float delta_t = fmaxf(t_1 - t_0, 0.0f);
-        float alpha = 1 - expf(-s_primal * delta_t);
-        float weight = transmittance * alpha;
+        // 1 - exp(-rho*delta)
 
+        //NEW VIEW DEPENDENT DENSITY
+        // = old density + vod
+        float s_vod = s_primal + vod;
+        
+        //float alpha = 1 - expf(-s_primal * delta_t);
+        float alpha = 1 - expf(-s_vod * delta_t);
+        //T * (1 - exp(-rho*delta)) --> this is the contribution of this cell to the final pixel color
+        float weight = transmittance * alpha;        
+        // per point sum off rendering weights across all rays
+        // multiple rays may pass through the same point/cell, hence we use atomicAdd
         if (point_contribution) {
             atomicAdd(point_contribution + point_idx, (attr_scalar)weight);
         }
         accumulated_rgb += weight * rgb_primal;
-
+        // exp(-rho*delta)
         float next_transmittance = transmittance * (1 - alpha);
+        //if next transmittance drops below the transmittance of the current depth quantile threshold
         while (current_quantile_idx < num_depth_quantiles &&
                next_transmittance < current_quantile) {
+                //then calculate the depth along the ray of that quantile
             quantile_depths[thread_idx * num_depth_quantiles +
                             current_quantile_idx] =
                 t_0 + logf(transmittance / current_quantile) / s_primal;
+                //save the point index where the quantile lies in
             quantile_point_indices[thread_idx * num_depth_quantiles +
                                    current_quantile_idx] = point_idx;
+            //update so the next quantile can be worked on
             current_quantile_idx++;
             if (current_quantile_idx < num_depth_quantiles) {
                 current_quantile = ray_depth_quantiles[current_quantile_idx];
@@ -101,6 +152,8 @@ __global__ void forward(TraceSettings settings,
         return transmittance > settings.weight_threshold;
     };
 
+    // i guess this is the 3d point nearest to the camera based in nearest neighbor
+    // for the current ray
     uint32_t start_point = start_point_index[thread_idx];
 
     uint32_t n = trace<block_size, 4>(ray,

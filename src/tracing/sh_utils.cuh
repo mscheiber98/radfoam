@@ -31,6 +31,7 @@ __constant__ float C4[9] = {2.5033429417967046f,
 
 constexpr int sh_dimension(int degree) { return (degree + 1) * (degree + 1); }
 
+//calculates the SH basis functions for a given view direction
 template <int degree>
 __device__ Vecf<sh_dimension(degree)> sh_coefficients(const Vec3f &dir) {
     float x = dir[0];
@@ -69,9 +70,12 @@ __device__ Vecf<sh_dimension(degree)> sh_coefficients(const Vec3f &dir) {
     return sh;
 }
 
+//evaluates spherical harmonics to compute the RGB for a given view direction
+
 template <typename scalar, int degree>
-__device__ Vec3f load_sh_as_rgb(const Vecf<sh_dimension(degree)> &coeffs,
-                                const scalar *sh_rgb_vals) {
+__device__ Vec3f load_sh_as_rgb(const Vecf<sh_dimension(degree)> &coeffs, //the coefficients (basis functions) for the view direction
+                                const scalar *sh_rgb_vals // the learned per-point SH coefficients stored in memory
+                            ) {
     Vec3f rgb = Vec3f(0.5f, 0.5f, 0.5f);
 
 #pragma unroll

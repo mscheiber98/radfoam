@@ -17,7 +17,8 @@ trace(const Ray &ray,
       CellFunctor cell_functor) {
     float t_0 = 0.0f;
     uint32_t n = 0;
-
+    
+    // point of the 3d point set. starting point is the one nearest to the camera position by nearest neighbor
     uint32_t current_point_idx = start_point;
     Vec3f primal_point = points[current_point_idx];
 
@@ -50,6 +51,7 @@ trace(const Ray &ray,
             }
 
 #pragma unroll
+//find the nearest cell boundary intersection along the ray
             for (uint32_t j = 0; j < chunk_size; ++j) {
                 Vec3f offset(__half2float(chunk[2 * j].x),
                              __half2float(chunk[2 * j].y),

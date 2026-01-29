@@ -87,6 +87,7 @@ def train(args, pipeline_args, model_args, optimizer_args, dataset_args):
     rgb_loss = nn.SmoothL1Loss(reduction="none")
 
     # Setting up model
+    # here i add the vod parameters
     model = RadFoamScene(
         args=model_args,
         device=device,
@@ -106,6 +107,8 @@ def train(args, pipeline_args, model_args, optimizer_args, dataset_args):
     ):
         rays = test_data_handler.rays
         points, _, _, _ = model.get_trace_data()
+        
+        #this is an index i think ?
         start_points = model.get_starting_point(
             rays[:, 0, 0].cuda(), points, model.aabb_tree
         )

@@ -30,6 +30,7 @@ class TraceRays(torch.autograd.Function):
         ctx.point_adjacency = _point_adjacency
         ctx.point_adjacency_offsets = _point_adjacency_offsets
 
+        # start point is an index i think ?
         results = pipeline.trace_forward(
             _points,
             _attributes,
