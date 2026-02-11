@@ -23,11 +23,11 @@ __global__ void forward(TraceSettings settings,
                         const Ray *__restrict__ rays,
                         uint32_t num_rays,
                         const uint32_t *__restrict__ start_point_index,
-                        uint32_t num_depth_quantiles,
-                        const float *__restrict__ depth_quantiles,
+                        uint32_t num_depth_quantiles, // input: how many depth quantiles are used
+                        const float *__restrict__ depth_quantiles, // input: quantiles for the rays (e.g. ray 1 has quantiles [0.4,0.7])
                         attr_scalar *__restrict__ ray_rgba,
-                        float *__restrict__ quantile_depths,
-                        uint32_t *__restrict__ quantile_point_indices,
+                        float *__restrict__ quantile_depths, // output: the depths along the rays where the input quantiles lie
+                        uint32_t *__restrict__ quantile_point_indices,// output: the points/cells in which the quantiles lie
                         uint32_t *__restrict__ num_intersections,
                         attr_scalar *__restrict__ point_contribution // holds an array of the contributions of the points to the final image)
 )
@@ -48,7 +48,7 @@ __global__ void forward(TraceSettings settings,
     Ray ray = rays[thread_idx];
     ray.direction /= ray.direction.norm();
 
-    //depth quantiles is the pointer to the beginnign of the depth_quantiles array
+    //depth quantiles is the pointer to the beginning of the depth_quantiles array
     // by adding thread_idx * num_depth_quantiles it now points to the depth quantiles of the current ray
     const float *ray_depth_quantiles =
         depth_quantiles + thread_idx * num_depth_quantiles;
@@ -102,24 +102,25 @@ __global__ void forward(TraceSettings settings,
                        const Vec3f &current_point,
                        const Vec3f &next_point) {
         Vec3f rgb_primal;
-        float s_primal;
+        float s;
         // VOD PARAMETERS
         float vod;
 
-        load_attributes(point_idx, rgb_primal, s_primal, vod);
+        load_attributes(point_idx, rgb_primal, s, vod);
         
         //SEE VOLUME RENDERING EQUATION PIECEWISE CONSTANT IN RADFOAM PAPER
         //Transmittance is variable T in the formula
         //delta
         float delta_t = fmaxf(t_1 - t_0, 0.0f);
-        // 1 - exp(-rho*delta)
 
         //NEW VIEW DEPENDENT DENSITY
         // = old density + vod
-        float s_vod = s_primal + vod;
+        float s_primal = s + vod;
         
+        // 1 - exp(-rho*delta)
         //float alpha = 1 - expf(-s_primal * delta_t);
-        float alpha = 1 - expf(-s_vod * delta_t);
+        float alpha = 1 - expf(-s_primal * delta_t);
+        
         //T * (1 - exp(-rho*delta)) --> this is the contribution of this cell to the final pixel color
         float weight = transmittance * alpha;        
         // per point sum off rendering weights across all rays
@@ -134,6 +135,9 @@ __global__ void forward(TraceSettings settings,
         while (current_quantile_idx < num_depth_quantiles &&
                next_transmittance < current_quantile) {
                 //then calculate the depth along the ray of that quantile
+                // transmittance = transmittance BEFORE current cell
+                // next_transmittance = transmittance AFTER current cell
+                // s_primal = density of current cell
             quantile_depths[thread_idx * num_depth_quantiles +
                             current_quantile_idx] =
                 t_0 + logf(transmittance / current_quantile) / s_primal;
@@ -165,6 +169,7 @@ __global__ void forward(TraceSettings settings,
                                       settings.max_intersections,
                                       functor);
 
+    // fill any quantiles that haven't been reached by the ray marching
     while (current_quantile_idx < num_depth_quantiles) {
         quantile_depths[thread_idx * num_depth_quantiles +
                         current_quantile_idx] = -1.0f;
@@ -196,47 +201,79 @@ __global__ void backward(TraceSettings settings,
                          const float *__restrict__ depth_quantiles,
                          const uint32_t *__restrict__ quantile_point_indices,
                          const attr_scalar *__restrict__ ray_rgba,
-                         const attr_scalar *__restrict__ ray_rgba_grad,
-                         const float *__restrict__ depth_grad,
-                         const attr_scalar *__restrict__ ray_error,
+                         const attr_scalar *__restrict__ ray_rgba_grad, // input: ∂loss/∂RGBA
+                         const float *__restrict__ depth_grad, //input: Gradient w.r.t. ∂loss/∂depth
+                         const attr_scalar *__restrict__ ray_error, // input: Optional per-ray error for point error accumulation
                          Ray *__restrict__ ray_grad,
-                         Vec3f *__restrict__ points_grad,
-                         attr_scalar *__restrict__ attribute_grad,
-                         attr_scalar *__restrict__ point_error) {
+                         Vec3f *__restrict__ points_grad, // output: Gradient w.r.t. point positions
+                         attr_scalar *__restrict__ attribute_grad, //output: Gradient w.r.t. SH coefficients and density
+                         attr_scalar *__restrict__ point_error) // output: accumulated error per point
+                         {
 
+    //each thread works on one ray
     uint32_t thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (thread_idx >= num_rays)
         return;
 
+    // every color gets one set of spherical harmonics coefficients that describe the view dependent color
+    // the number of coefficients per degree is calculated by (1 + degree)²
     constexpr int sh_dim = 3 * (1 + sh_degree) * (1 + sh_degree);
-    constexpr int attr_memory_size = 1 + sh_dim;
+    // spherical harmonics + opacity + view dependent opacity (sggx matrix)
+    constexpr int attr_memory_size = sh_dim + 1 + 9;
 
     Ray ray = rays[thread_idx];
     ray.direction /= ray.direction.norm();
 
+    // ray_depth_grad[0] = ∂L/∂quantile_depth[0] for this ray
+    // ray_depth_grad[1] = ∂L/∂quantile_depth[1] for this ray
     const float *ray_depth_grad = depth_grad + thread_idx * num_depth_quantiles;
+    //depth quantiles is the pointer to the beginning of the depth_quantiles array
+    // by adding thread_idx * num_depth_quantiles it now points to the depth quantiles of the current ray
     const float *ray_depth_quantiles =
         depth_quantiles + thread_idx * num_depth_quantiles;
-
+    
+    //calculate the spherical harmonics coefficients given the view direction
     auto sh_coeffs = sh_coefficients<sh_degree>(ray.direction);
 
-    auto load_attributes = [&](uint32_t v_idx, Vec3f &rgb, float &s) {
-        const attr_scalar *attr_ptr = attributes + v_idx * attr_memory_size;
-        s = (float)attr_ptr[attr_memory_size - 1];
-        if (s > 1e-6f) {
-            rgb = load_sh_as_rgb<attr_scalar, sh_degree>(sh_coeffs, attr_ptr);
-        } else {
-            rgb = Vec3f::Zero();
-        }
+    //lambda function to load vertex attributes
+    auto load_attributes = [&](uint32_t v_idx, Vec3f &rgb, float &s, float &vod) {
+            const attr_scalar *attr_ptr = attributes + v_idx * attr_memory_size;
+            s = (float)attr_ptr[attr_memory_size - 10];
+            //if density is larger than threshold, load color using spherical harmonics
+            if (s > 1e-6f) {
+                rgb = load_sh_as_rgb<attr_scalar, sh_degree>(sh_coeffs, attr_ptr);
+            } else {
+                rgb = Vec3f::Zero();
+            }
+            //VOD Parameters - stored row-major: row1=[1,2,3], row2=[4,5,6], row3=[7,8,9]
+            const float sggx_1 = (float)attr_ptr[attr_memory_size -9];
+            const float sggx_2 = (float)attr_ptr[attr_memory_size -8];
+            const float sggx_3 = (float)attr_ptr[attr_memory_size -7];
+            const float sggx_4 = (float)attr_ptr[attr_memory_size -6];
+            const float sggx_5 = (float)attr_ptr[attr_memory_size -5];
+            const float sggx_6 = (float)attr_ptr[attr_memory_size -4];
+            const float sggx_7 = (float)attr_ptr[attr_memory_size -3];
+            const float sggx_8 = (float)attr_ptr[attr_memory_size -2];
+            const float sggx_9 = (float)attr_ptr[attr_memory_size -1];
+            Mat3f sggx;
+            // Initialize row-major: assign row by row
+            sggx.row(0) << sggx_1, sggx_2, sggx_3;
+            sggx.row(1) << sggx_4, sggx_5, sggx_6;
+            sggx.row(2) << sggx_7, sggx_8, sggx_9;
+            //calculate the view dependent density for the point and the ray view direction
+            // w^T * S * w
+            vod = ray.direction.transpose() * sggx * ray.direction;
     };
 
     Vec4f rgba_grad, rgba;
 #pragma unroll
+    // get rgba of current ray
     for (uint32_t i = 0; i < 4; ++i) {
         rgba_grad[i] = (float)ray_rgba_grad[thread_idx * 4 + i];
         rgba[i] = (float)ray_rgba[thread_idx * 4 + i];
     }
 
+    // get error of current ray
     float error;
     if (ray_error) {
         error = (float)ray_error[thread_idx];
@@ -248,6 +285,9 @@ __global__ void backward(TraceSettings settings,
         current_quantile = ray_depth_quantiles[current_quantile_idx];
     }
     float current_depth_grad = 0.0f;
+    // read out all the quantile depth gradients for the current ray
+    // NORMALIZE each quantile depth gradient by the density of the cell where the quantile appears
+    // add the normalized gradients up in current_depth_grad
     for (uint32_t i = 0; i < num_depth_quantiles; ++i) {
         if (quantile_point_indices[thread_idx * num_depth_quantiles + i] !=
             UINT32_MAX) {
@@ -269,16 +309,23 @@ __global__ void backward(TraceSettings settings,
     Vec3f current_point_grad = Vec3f::Zero();
     Vec3f next_point_grad = Vec3f::Zero();
 
+    // calculate gradients in backward pass for one single cell
     auto functor = [&](uint32_t point_idx,
                        float t_0,
                        float t_1,
                        const Vec3f &current_point,
                        const Vec3f &next_point) {
         Vec3f rgb_primal;
-        float s_primal;
+        float s;        
+        //vod parameters
+        float vod;
 
-        load_attributes(point_idx, rgb_primal, s_primal);
+        load_attributes(point_idx, rgb_primal, s, vod);
+        
+        // this is our new formula inlcuding vied dependent density
+        float s_primal = s + vod;
 
+        // calculate weight of the cell like in forward pass
         float delta_t = fmaxf(t_1 - t_0, 0.0f);
         float alpha = 1 - expf(-s_primal * delta_t);
         float weight = transmittance * alpha;
@@ -288,36 +335,60 @@ __global__ void backward(TraceSettings settings,
             dalpha_ddelta_t = s_primal * (1 - alpha);
         }
 
+        // add cell contribution of color to final color like in forward
         accumulated_rgb += weight * rgb_primal;
+        // track the error of the point
         if (point_error) {
             atomicAdd(point_error + point_idx, (attr_scalar)(weight * error));
         }
 
+        ////////RGBA LOSS
+        // extract the first 3 components of thr rgba gradient --> [dL/dR, dL/dG, dL/dB]
+        // for the current point
+        // weight = contribution of the point to the final color
+        // use weight to propagate rgb loss to current cell
+        // dL/dRGB_final is given in rgba_grad
+        // dRGB_final/dRGB_point = weight
         Vec3f dL_drgb_primal = rgba_grad.template head<3>() * weight;
-
+        
+        // the color that would be accumulated after the current cell
+        // the remainding color is theoretically calculated by the remainding transmittance * the rgb color of the following cells
         Vec3f rgb_rest = rgba.template head<3>() - accumulated_rgb;
+        // this divides out the transmittance so we get alpha*color of the following cells
         rgb_rest /= (transmittance * (1 - alpha + 1e-6f));
 
+        // how changing alpha affects the RGB color
         float dL_dalpha =
             transmittance *
             (rgb_primal - rgb_rest).dot(rgba_grad.template head<3>());
+        //how changing alpha affects the final opacity
         dL_dalpha += (1 - rgba[3]) * rgba_grad[3] / (1 - alpha + 1e-6f);
 
         float dL_ds_primal = dL_dalpha * dalpha_ds_primal;
         float dL_ddelta_t = dL_dalpha * dalpha_ddelta_t;
 
+        //////DEPTH QUANTILE LOSS
         float dL_dt0 = 0.0f;
 
+        // transmittance = transmittance before current cell
+        // next tansmittance = transmittance after current cell
         float next_transmittance = transmittance * (1 - alpha);
+        // check if we cross quantile threshold in the current cell
+        // so we can differentiate the exact formula that calculates the quantile depth
+        // we take in account every quantile that is affected by the current cell
         while (current_quantile_idx < num_depth_quantiles &&
                next_transmittance < current_quantile) {
 
             float depth_grad_i =
                 ray_depth_grad[current_quantile_idx] / s_primal;
             dL_dt0 += depth_grad_i;
+
+            // effectively, the s_primal is squared because it is already contained in dept_grad_i
+            // this is correct according to differentiating the formula of the depth quantiles
             dL_ds_primal += -depth_grad_i *
                             logf(transmittance / current_quantile) / s_primal;
 
+            //we update the depth gradients for the quantiles that still lie ahead
             current_depth_grad -= depth_grad_i;
 
             current_quantile_idx++;
@@ -326,8 +397,12 @@ __global__ void backward(TraceSettings settings,
             }
         }
 
+        // The codes accumulates the gradients for ALL following quantiles that are still ahead, i.e. come after the current cell
+        // by using current_depth_grad, which accumulates ALL depth gradients "dL/ddepthq" for the quantiles that lie ahead
         if (current_quantile_idx < num_depth_quantiles) {
+            // - delta_cell * (dL/ddepthq / rho_q)
             dL_ds_primal += -delta_t * current_depth_grad;
+            // - rho_cell * (dL/ddepthq / rho_q)
             dL_ddelta_t += -s_primal * current_depth_grad;
         }
 
@@ -376,9 +451,15 @@ __global__ void backward(TraceSettings settings,
             sh_coeffs,
             dL_drgb_primal,
             attribute_grad + point_idx * attr_memory_size);
+
+        // writing density grad to primal density
         atomicAdd(attribute_grad + point_idx * attr_memory_size +
-                      (attr_memory_size - 1),
+                      (attr_memory_size - 10),
                   (attr_scalar)dL_ds_primal);
+
+        write_density_grad_to_sggx<attr_scalar>(ray.direction,
+        dL_ds_primal,
+        attribute_grad + point_idx * attr_memory_size + (attr_memory_size- 9));
 
         return transmittance > settings.weight_threshold;
     };

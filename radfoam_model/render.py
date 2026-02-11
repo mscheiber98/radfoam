@@ -85,11 +85,11 @@ class TraceRays(torch.autograd.Function):
             _point_adjacency_offsets,
             rays,
             start_point,
-            rgba,
-            grad_rgba,
-            depth_quantiles,
+            rgba, # forward pass output, needed for gradient calculation
+            grad_rgba, # Input: ∂loss/∂RGBA
+            depth_quantiles, # Input: ∂loss/∂depth
             ctx.depth_indices,
-            grad_depth,
+            grad_depth, # Shape: [batch, rays, 2] Contains: [∂L/∂depth[0], ∂L/∂depth[1]] for each ray
             ctx.errbox.ray_error,
         )
         points_grad = results["points_grad"]

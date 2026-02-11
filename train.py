@@ -194,6 +194,7 @@ def train(args, pipeline_args, model_args, optimizer_args, dataset_args):
                 else:
                     rgb_output = rgba_output[..., :3]
 
+                # compute losses
                 color_loss = rgb_loss(rgb_batch, rgb_output)
                 opacity_loss = ((alpha_batch - opacity) ** 2).mean()
 
