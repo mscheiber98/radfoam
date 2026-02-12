@@ -293,9 +293,31 @@ __global__ void backward(TraceSettings settings,
             UINT32_MAX) {
             uint32_t point_idx =
                 quantile_point_indices[thread_idx * num_depth_quantiles + i];
+
             float s = (float)
-                attributes[point_idx * attr_memory_size + attr_memory_size - 1];
-            current_depth_grad += ray_depth_grad[i] / s;
+                attributes[point_idx * attr_memory_size + attr_memory_size - 10];
+
+            //VOD Parameters - stored row-major: row1=[1,2,3], row2=[4,5,6], row3=[7,8,9]
+            const float sggx_1 = (float)attr_ptr[attr_memory_size -9];
+            const float sggx_2 = (float)attr_ptr[attr_memory_size -8];
+            const float sggx_3 = (float)attr_ptr[attr_memory_size -7];
+            const float sggx_4 = (float)attr_ptr[attr_memory_size -6];
+            const float sggx_5 = (float)attr_ptr[attr_memory_size -5];
+            const float sggx_6 = (float)attr_ptr[attr_memory_size -4];
+            const float sggx_7 = (float)attr_ptr[attr_memory_size -3];
+            const float sggx_8 = (float)attr_ptr[attr_memory_size -2];
+            const float sggx_9 = (float)attr_ptr[attr_memory_size -1];
+            Mat3f sggx;
+            // Initialize row-major: assign row by row
+            sggx.row(0) << sggx_1, sggx_2, sggx_3;
+            sggx.row(1) << sggx_4, sggx_5, sggx_6;
+            sggx.row(2) << sggx_7, sggx_8, sggx_9;
+            //calculate the view dependent density for the point and the ray view direction
+            // w^T * S * w
+            vod = ray.direction.transpose() * sggx * ray.direction;
+
+
+            current_depth_grad += ray_depth_grad[i] / (s + vod);
         }
     }
 
@@ -490,6 +512,7 @@ visualization(TraceSettings settings,
               cudaSurfaceObject_t output_rgba,
               uint32_t start_point_index) {
 
+    // every kernel works on one pixel
     uint32_t thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t pix_i = thread_idx % camera.width;
     uint32_t pix_j = thread_idx / camera.width;
@@ -498,7 +521,7 @@ visualization(TraceSettings settings,
         return;
 
     constexpr int sh_dim = 3 * (1 + sh_degree) * (1 + sh_degree);
-    constexpr int attr_memory_size = 1 + sh_dim;
+    constexpr int attr_memory_size = 1 + sh_dim + 9;
 
     Ray ray = cast_ray(camera, pix_i, pix_j);
     if (ray.direction.norm() < 0.1f) {
@@ -508,15 +531,35 @@ visualization(TraceSettings settings,
 
     auto sh_coeffs = sh_coefficients<sh_degree>(ray.direction);
 
-    auto load_attributes = [&](uint32_t v_idx, Vec3f &rgb, float &s) {
+    //lambda function to load vertex attributes
+    auto load_attributes = [&](uint32_t v_idx, Vec3f &rgb, float &s, float &vod) {
         const attr_scalar *attr_ptr = attributes + v_idx * attr_memory_size;
-        s = (float)attr_ptr[attr_memory_size - 1];
+        s = (float)attr_ptr[attr_memory_size - 10];
+        //if density is larger than threshold, load color using spherical harmonics
         if (s > 1e-6f) {
             rgb = load_sh_as_rgb<attr_scalar, sh_degree>(sh_coeffs, attr_ptr);
         } else {
             rgb = Vec3f::Zero();
         }
-    };
+        //VOD Parameters - stored row-major: row1=[1,2,3], row2=[4,5,6], row3=[7,8,9]
+        const float sggx_1 = (float)attr_ptr[attr_memory_size -9];
+        const float sggx_2 = (float)attr_ptr[attr_memory_size -8];
+        const float sggx_3 = (float)attr_ptr[attr_memory_size -7];
+        const float sggx_4 = (float)attr_ptr[attr_memory_size -6];
+        const float sggx_5 = (float)attr_ptr[attr_memory_size -5];
+        const float sggx_6 = (float)attr_ptr[attr_memory_size -4];
+        const float sggx_7 = (float)attr_ptr[attr_memory_size -3];
+        const float sggx_8 = (float)attr_ptr[attr_memory_size -2];
+        const float sggx_9 = (float)attr_ptr[attr_memory_size -1];
+        Mat3f sggx;
+        // Initialize row-major: assign row by row
+        sggx.row(0) << sggx_1, sggx_2, sggx_3;
+        sggx.row(1) << sggx_4, sggx_5, sggx_6;
+        sggx.row(2) << sggx_7, sggx_8, sggx_9;
+        //calculate the view dependent density for the point and the ray view direction
+        // w^T * S * w
+        vod = ray.direction.transpose() * sggx * ray.direction;
+};
 
     float transmittance = 1.0f;
     Vec3f accumulated_rgb = Vec3f::Zero();
@@ -529,9 +572,12 @@ visualization(TraceSettings settings,
                        const Vec3f &current_point,
                        const Vec3f &next_point) {
         Vec3f rgb_primal;
-        float s_primal;
+        float s;
+        float vod;
 
-        load_attributes(point_idx, rgb_primal, s_primal);
+        load_attributes(point_idx, rgb_primal, s, vod);
+
+        float s_primal = s + vod;
 
         float delta_t = fmaxf(t_1 - t_0, 0.0f);
         float alpha = 1 - expf(-s_primal * delta_t);
@@ -622,7 +668,7 @@ __global__ void benchmark(TraceSettings settings,
         return;
 
     constexpr int sh_dim = 3 * (1 + sh_degree) * (1 + sh_degree);
-    constexpr int attr_memory_size = 1 + sh_dim;
+    constexpr int attr_memory_size = 1 + sh_dim + 9;
 
     Ray ray = cast_ray(camera, pix_i, pix_j);
     if (ray.direction.norm() < 0.1f) {
@@ -632,15 +678,35 @@ __global__ void benchmark(TraceSettings settings,
 
     auto sh_coeffs = sh_coefficients<sh_degree>(ray.direction);
 
-    auto load_attributes = [&](uint32_t v_idx, Vec3f &rgb, float &s) {
+    //lambda function to load vertex attributes
+    auto load_attributes = [&](uint32_t v_idx, Vec3f &rgb, float &s, float &vod) {
         const attr_scalar *attr_ptr = attributes + v_idx * attr_memory_size;
-        s = (float)attr_ptr[attr_memory_size - 1];
+        s = (float)attr_ptr[attr_memory_size - 10];
+        //if density is larger than threshold, load color using spherical harmonics
         if (s > 1e-6f) {
             rgb = load_sh_as_rgb<attr_scalar, sh_degree>(sh_coeffs, attr_ptr);
         } else {
             rgb = Vec3f::Zero();
         }
-    };
+        //VOD Parameters - stored row-major: row1=[1,2,3], row2=[4,5,6], row3=[7,8,9]
+        const float sggx_1 = (float)attr_ptr[attr_memory_size -9];
+        const float sggx_2 = (float)attr_ptr[attr_memory_size -8];
+        const float sggx_3 = (float)attr_ptr[attr_memory_size -7];
+        const float sggx_4 = (float)attr_ptr[attr_memory_size -6];
+        const float sggx_5 = (float)attr_ptr[attr_memory_size -5];
+        const float sggx_6 = (float)attr_ptr[attr_memory_size -4];
+        const float sggx_7 = (float)attr_ptr[attr_memory_size -3];
+        const float sggx_8 = (float)attr_ptr[attr_memory_size -2];
+        const float sggx_9 = (float)attr_ptr[attr_memory_size -1];
+        Mat3f sggx;
+        // Initialize row-major: assign row by row
+        sggx.row(0) << sggx_1, sggx_2, sggx_3;
+        sggx.row(1) << sggx_4, sggx_5, sggx_6;
+        sggx.row(2) << sggx_7, sggx_8, sggx_9;
+        //calculate the view dependent density for the point and the ray view direction
+        // w^T * S * w
+        vod = ray.direction.transpose() * sggx * ray.direction;
+};
 
     float transmittance = 1.0f;
     Vec3f accumulated_rgb = Vec3f::Zero();
@@ -651,9 +717,12 @@ __global__ void benchmark(TraceSettings settings,
                        const Vec3f &current_point,
                        const Vec3f &next_point) {
         Vec3f rgb_primal;
-        float s_primal;
+        float s;
+        float vod;
 
-        load_attributes(point_idx, rgb_primal, s_primal);
+        load_attributes(point_idx, rgb_primal, s, vod);
+
+        float s_primal = s + vod;
 
         float delta_t = fmaxf(t_1 - t_0, 0.0f);
         float alpha = 1 - expf(-s_primal * delta_t);
