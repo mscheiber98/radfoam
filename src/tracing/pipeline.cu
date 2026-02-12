@@ -15,10 +15,10 @@ template <typename attr_scalar, int sh_degree, int block_size>
 // __restrict__ is a compiler hint that the memory is not aliased with other memory and allows the compiler to optimize the code
 // attr_scalar is the type of the attributes, sh_degree is the degree of the spherical harmonics, block_size is the number of threads per block
 __global__ void forward(TraceSettings settings,
-                        const Vec3f *__restrict__ points,
-                        const attr_scalar *__restrict__ attributes,
-                        const uint32_t *__restrict__ point_adjacency,
-                        const uint32_t *__restrict__ point_adjacency_offsets,
+                        const Vec3f *__restrict__ points, // input: coordinates of primal points [x,y,z]
+                        const attr_scalar *__restrict__ attributes, //input: [sh-coefficients, density, sggx]
+                        const uint32_t *__restrict__ point_adjacency, // input: list of point adjacency
+                        const uint32_t *__restrict__ point_adjacency_offsets, // input: index offsets for point adjacency list so we can extract the adjacency for a specific point
                         const Vec4h *__restrict__ adjacent_diff,
                         const Ray *__restrict__ rays,
                         uint32_t num_rays,

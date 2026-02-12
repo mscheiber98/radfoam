@@ -243,6 +243,11 @@ def train(args, pipeline_args, model_args, optimizer_args, dataset_args):
                     writer.add_scalar(
                         "lr/attr_lr", model.attr_dc_scheduler_args(i), i
                     )
+                    
+                    # VOD PARAMETERS
+                    writer.add_scalar(
+                        "lr/sggx_lr", model.sggx_scheduler_args(i),i
+                    )
 
                 if iters_since_update >= triangulation_update_period:
                     model.update_triangulation(incremental=True)
