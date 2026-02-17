@@ -129,13 +129,8 @@ class RadFoamScene(torch.nn.Module):
             ],
             dim=0,
         ).to(self.device)
-        self.num_init_points = self.primal_points.shape[0]
-        sggx = torch.zeros(self.num_init_points, 9, dtype=self.attr_dtype)
-        
-        # register the parameter tensors as learnable parameters
-        self.primal_points = nn.Parameter(primal_points)
-        self.density = nn.Parameter(density)
-        self.sggx = nn.Parameter(sggx)
+        self.num_init_points = primal_points.shape[0]
+        sggx = torch.zeros(self.num_init_points, 9, dtype=self.attr_dtype).to(self.device)
         
         # build the triangulation
         self.triangulation = radfoam.Triangulation(primal_points)
@@ -143,7 +138,10 @@ class RadFoamScene(torch.nn.Module):
         # the order of primal points can be changed by the triangulation for optimization reasons
         # we propagate the new point order to the model parameters to fit the triangulation point order
         perm = self.triangulation.permutation().to(torch.long)
-        self.permute_points(perm)
+         # register the parameter tensors as learnable parameters
+        self.primal_points = nn.Parameter(primal_points[perm])
+        self.density = nn.Parameter(density[perm])
+        self.sggx = nn.Parameter(sggx[perm])
         self.faces = None
         # we call this to build the AABB tree and the point adjacency data
         self.update_triangulation(rebuild=False)

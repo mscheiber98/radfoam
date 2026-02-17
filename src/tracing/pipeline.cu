@@ -298,15 +298,15 @@ __global__ void backward(TraceSettings settings,
                 attributes[point_idx * attr_memory_size + attr_memory_size - 10];
 
             //VOD Parameters - stored row-major: row1=[1,2,3], row2=[4,5,6], row3=[7,8,9]
-            const float sggx_1 = (float)attr_ptr[attr_memory_size -9];
-            const float sggx_2 = (float)attr_ptr[attr_memory_size -8];
-            const float sggx_3 = (float)attr_ptr[attr_memory_size -7];
-            const float sggx_4 = (float)attr_ptr[attr_memory_size -6];
-            const float sggx_5 = (float)attr_ptr[attr_memory_size -5];
-            const float sggx_6 = (float)attr_ptr[attr_memory_size -4];
-            const float sggx_7 = (float)attr_ptr[attr_memory_size -3];
-            const float sggx_8 = (float)attr_ptr[attr_memory_size -2];
-            const float sggx_9 = (float)attr_ptr[attr_memory_size -1];
+            const float sggx_1 = (float)attributes[point_idx * attr_memory_size + attr_memory_size -9];
+            const float sggx_2 = (float)attributes[point_idx * attr_memory_size + attr_memory_size -8];
+            const float sggx_3 = (float)attributes[point_idx * attr_memory_size + attr_memory_size -7];
+            const float sggx_4 = (float)attributes[point_idx * attr_memory_size + attr_memory_size -6];
+            const float sggx_5 = (float)attributes[point_idx * attr_memory_size + attr_memory_size -5];
+            const float sggx_6 = (float)attributes[point_idx * attr_memory_size + attr_memory_size -4];
+            const float sggx_7 = (float)attributes[point_idx * attr_memory_size + attr_memory_size -3];
+            const float sggx_8 = (float)attributes[point_idx * attr_memory_size + attr_memory_size -2];
+            const float sggx_9 = (float)attributes[point_idx * attr_memory_size + attr_memory_size -1];
             Mat3f sggx;
             // Initialize row-major: assign row by row
             sggx.row(0) << sggx_1, sggx_2, sggx_3;
@@ -314,7 +314,7 @@ __global__ void backward(TraceSettings settings,
             sggx.row(2) << sggx_7, sggx_8, sggx_9;
             //calculate the view dependent density for the point and the ray view direction
             // w^T * S * w
-            vod = ray.direction.transpose() * sggx * ray.direction;
+            float vod = ray.direction.transpose() * sggx * ray.direction;
 
 
             current_depth_grad += ray_depth_grad[i] / (s + vod);
@@ -968,7 +968,8 @@ class CUDATracingPipeline : public Pipeline {
     }
 
     uint32_t attribute_dim() const override {
-        return 1 + 3 * (1 + sh_degree) * (1 + sh_degree);
+        // here we also have to add the new VOD parameters
+        return 1 + 3 * (1 + sh_degree) * (1 + sh_degree) + 9;
     }
 
     ScalarType attribute_type() const override {
