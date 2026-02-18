@@ -130,7 +130,8 @@ class RadFoamScene(torch.nn.Module):
                 dim=0,
             ).to(self.device)
             self.num_init_points = primal_points.shape[0]
-            sggx = torch.zeros(self.num_init_points, 6, dtype=self.attr_dtype).to(self.device)
+            sggx = torch.tensor([1.0, 0.0, 0.0, 1.0, 0.0, 1.0],dtype=self.attr_dtype).to(self.device)
+            sggx = sggx.repeat(self.num_init_points, 1)
             
             # build the triangulation
             self.triangulation = radfoam.Triangulation(primal_points)
