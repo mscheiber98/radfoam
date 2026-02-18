@@ -167,4 +167,14 @@ __device__ void write_density_grad_to_sggx(const Vec3f &dir, //viewing direction
 
 }
 
+__device__ float sigmoid(float x) {
+    if (x >= 0) {
+        float exp_neg_x = expf(-x);
+        return 1.0f / (1.0f + exp_neg_x);
+    } else {
+        float exp_x = expf(x);
+        return exp_x / (1.0f + exp_x);
+    }
+}
+
 } // namespace radfoam

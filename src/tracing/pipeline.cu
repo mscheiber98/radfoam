@@ -10,6 +10,7 @@
 #include "tracing_utils.cuh"
 
 namespace radfoam {
+    
 
 template <typename attr_scalar, int sh_degree, int block_size>
 // __restrict__ is a compiler hint that the memory is not aliased with other memory and allows the compiler to optimize the code
@@ -100,7 +101,7 @@ __global__ void forward(TraceSettings settings,
                        const Vec3f &next_point) {
         Vec3f rgb_primal;
         float s;
-        // view dependent opacity
+        // view dependent density
         float vod;
 
         load_attributes(point_idx, rgb_primal, s, vod);
@@ -112,7 +113,7 @@ __global__ void forward(TraceSettings settings,
 
         //NEW VIEW DEPENDENT DENSITY
         // = old density + vod
-        float s_primal = s + vod;
+        float s_primal = sigmoid(s + vod);
         
         // 1 - exp(-rho*delta)
         //float alpha = 1 - expf(-s_primal * delta_t);
@@ -313,7 +314,7 @@ __global__ void backward(TraceSettings settings,
             // w^T * S * w
             float vod = ray.direction.transpose() * sggx * ray.direction;
 
-            current_depth_grad += ray_depth_grad[i] / (s + vod);
+            current_depth_grad += ray_depth_grad[i] / sigmoid(s + vod);
         }
     }
 
@@ -341,7 +342,7 @@ __global__ void backward(TraceSettings settings,
         load_attributes(point_idx, rgb_primal, s, vod);
         
         // this is our new formula inlcuding vied dependent density
-        float s_primal = s + vod;
+        float s_primal = sigmoid(s + vod);
 
         // calculate weight of the cell like in forward pass
         float delta_t = fmaxf(t_1 - t_0, 0.0f);
@@ -469,14 +470,19 @@ __global__ void backward(TraceSettings settings,
             sh_coeffs,
             dL_drgb_primal,
             attribute_grad + point_idx * attr_memory_size);
+        
+        float ds_primal_ddensity = s_primal * (1.0 - s_primal);
+        float dL_ddensity = dL_ds_primal * ds_primal_ddensity;
+        // ddensity_ds = 1.0;
+        // ddensity_dvod = 1.0;
 
         // writing density grad to primal density
         atomicAdd(attribute_grad + point_idx * attr_memory_size +
                       (attr_memory_size - 7),
-                  (attr_scalar)dL_ds_primal);
+                  (attr_scalar)dL_ddensity);
 
         write_density_grad_to_sggx<attr_scalar>(ray.direction,
-        dL_ds_primal,
+        dL_ddensity,
         attribute_grad + point_idx * attr_memory_size + (attr_memory_size - 6));
 
         return transmittance > settings.weight_threshold;
@@ -570,7 +576,7 @@ visualization(TraceSettings settings,
 
         load_attributes(point_idx, rgb_primal, s, vod);
 
-        float s_primal = s + vod;
+        float s_primal = sigmoid(s + vod);
 
         float delta_t = fmaxf(t_1 - t_0, 0.0f);
         float alpha = 1 - expf(-s_primal * delta_t);
@@ -712,7 +718,7 @@ __global__ void benchmark(TraceSettings settings,
 
         load_attributes(point_idx, rgb_primal, s, vod);
 
-        float s_primal = s + vod;
+        float s_primal = sigmoid(s + vod);
         //float s_primal = vod;
         
 
