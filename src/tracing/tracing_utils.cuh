@@ -152,13 +152,19 @@ template <typename scalar>
 __device__ void write_density_grad_to_sggx(const Vec3f &dir, //viewing direction i.e. ray direction (normalized)
                                     float dL_ds_primal, // Loss gradient w.r.t. cell density
                                     scalar *sggx_grad) {
-    for (uint32_t i = 0; i < 9; ++i) {
-        //row index of sggx matrix
-        int row = i/3;
-        //column index of sggx matrix
-        int col = i % 3;
-        atomicAdd(sggx_grad + i, (scalar)(dir[row]*dir[col] * dL_ds_primal));
-    }
+    //sxx
+    atomicAdd(sggx_grad + 0, (scalar)(dir[0]*dir[0] * dL_ds_primal));
+    //sxy
+    atomicAdd(sggx_grad + 1, (scalar)(2.0*dir[0]*dir[1] * dL_ds_primal));
+    //sxz
+    atomicAdd(sggx_grad + 2, (scalar)(2.0*dir[0]*dir[2] * dL_ds_primal));
+    //syy
+    atomicAdd(sggx_grad + 3, (scalar)(dir[1]*dir[1] * dL_ds_primal));
+    //syz
+    atomicAdd(sggx_grad + 4, (scalar)(2.0*dir[1]*dir[2] * dL_ds_primal));
+    //szz
+    atomicAdd(sggx_grad + 5, (scalar)(dir[2]*dir[2] * dL_ds_primal));
+
 }
 
 } // namespace radfoam

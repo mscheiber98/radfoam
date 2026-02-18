@@ -95,7 +95,7 @@ class RadFoamScene(torch.nn.Module):
         density = torch.zeros(
             self.num_init_points, 1, device=self.device, dtype=self.attr_dtype
         )
-        sggx = torch.zeros(self.num_init_points, 9, device=self.device)
+        sggx = torch.zeros(self.num_init_points, 6, device=self.device)
         
         self.density = nn.Parameter(density[perm])
         self.sggx = nn.Parameter(sggx[perm])
@@ -105,46 +105,46 @@ class RadFoamScene(torch.nn.Module):
         
 
     def initialize_from_pcd(self, points, points_colors):
-        
-        #use 90 percent of the point cloud plus 5000 random points for initialization of primal points
-        points = points.to(self.device)
-        ##points_colors = points_colors.to(self.device)
-        num_random = 5_000
-        random = torch.randn([num_random, 3], device=self.device) * 10
-        num_samples = int(0.9 * points.shape[0])
-        print(
-            f"Starting with {num_samples} points from {points.shape[0]} COLMAP points"
-        )
-        points_idx = torch.randint(0, points.shape[0], (num_samples,))
-        samp_points = points[points_idx]
-        samp_points += torch.randn_like(samp_points) * 1e-2
-        ##samp_colors = points_colors[points_idx]
+            
+            #use 90 percent of the point cloud plus 5000 random points for initialization of primal points
+            points = points.to(self.device)
+            ##points_colors = points_colors.to(self.device)
+            num_random = 5_000
+            random = torch.randn([num_random, 3], device=self.device) * 10
+            num_samples = int(0.9 * points.shape[0])
+            print(
+                f"Starting with {num_samples} points from {points.shape[0]} COLMAP points"
+            )
+            points_idx = torch.randint(0, points.shape[0], (num_samples,))
+            samp_points = points[points_idx]
+            samp_points += torch.randn_like(samp_points) * 1e-2
+            ##samp_colors = points_colors[points_idx]
 
-        # create the parameter tensors
-        primal_points = torch.cat([samp_points, random], dim=0)       
-        density = torch.cat(
-            [
-                torch.rand(samp_points.shape[0], 1, dtype=self.attr_dtype),
-                -0.5 * torch.ones(num_random, 1, dtype=self.attr_dtype),
-            ],
-            dim=0,
-        ).to(self.device)
-        self.num_init_points = primal_points.shape[0]
-        sggx = torch.zeros(self.num_init_points, 9, dtype=self.attr_dtype).to(self.device)
-        
-        # build the triangulation
-        self.triangulation = radfoam.Triangulation(primal_points)
-        
-        # the order of primal points can be changed by the triangulation for optimization reasons
-        # we propagate the new point order to the model parameters to fit the triangulation point order
-        perm = self.triangulation.permutation().to(torch.long)
-         # register the parameter tensors as learnable parameters
-        self.primal_points = nn.Parameter(primal_points[perm])
-        self.density = nn.Parameter(density[perm])
-        self.sggx = nn.Parameter(sggx[perm])
-        self.faces = None
-        # we call this to build the AABB tree and the point adjacency data
-        self.update_triangulation(rebuild=False)
+            # create the parameter tensors
+            primal_points = torch.cat([samp_points, random], dim=0)       
+            density = torch.cat(
+                [
+                    torch.rand(samp_points.shape[0], 1, dtype=self.attr_dtype),
+                    -0.5 * torch.ones(num_random, 1, dtype=self.attr_dtype),
+                ],
+                dim=0,
+            ).to(self.device)
+            self.num_init_points = primal_points.shape[0]
+            sggx = torch.zeros(self.num_init_points, 6, dtype=self.attr_dtype).to(self.device)
+            
+            # build the triangulation
+            self.triangulation = radfoam.Triangulation(primal_points)
+            
+            # the order of primal points can be changed by the triangulation for optimization reasons
+            # we propagate the new point order to the model parameters to fit the triangulation point order
+            perm = self.triangulation.permutation().to(torch.long)
+            # register the parameter tensors as learnable parameters
+            self.primal_points = nn.Parameter(primal_points[perm])
+            self.density = nn.Parameter(density[perm])
+            self.sggx = nn.Parameter(sggx[perm])
+            self.faces = None
+            # we call this to build the AABB tree and the point adjacency data
+            self.update_triangulation(rebuild=False)
 
     # reorders per point data (position, density, sh coeffs, sggx and their optimizer states) to fit a primal point index permutation
     def permute_points(self, permutation):
@@ -337,7 +337,7 @@ class RadFoamScene(torch.nn.Module):
             {
                 "params": self.sggx,
                 # use 1/4 of original density learning rate like in the VoD 3DGS paper
-                "lr": 0.25* args.density_lr_init,
+                "lr": 0.25 * args.density_lr_init,
                 "name": "sggx",
             },
         ]
@@ -368,8 +368,8 @@ class RadFoamScene(torch.nn.Module):
         
         # VOD PARAMETERS
         self.sggx_scheduler_args = get_cosine_lr_func(
-            lr_init=0.25* args.density_lr_init,
-            lr_final=0.25* args.density_lr_final,
+            lr_init= args.density_lr_init,
+            lr_final= args.density_lr_final,
             warmup_steps=warmup,
             max_steps=max_iterations,
         )
@@ -664,9 +664,6 @@ class RadFoamScene(torch.nn.Module):
                     sggx[i, 3],
                     sggx[i, 4],
                     sggx[i, 5],
-                    sggx[i, 6],
-                    sggx[i, 7],
-                    sggx[i, 8],
                 )
             )
 
@@ -680,15 +677,12 @@ class RadFoamScene(torch.nn.Module):
             ("density", np.float32),
             ("adjacency_offset", np.uint32),
             # VOD PARAMETERS
-            ("sggx_1", np.float32),
-            ("sggx_2", np.float32),
-            ("sggx_3", np.float32),
-            ("sggx_4", np.float32),
-            ("sggx_5", np.float32),
-            ("sggx_6", np.float32),
-            ("sggx_7", np.float32),
-            ("sggx_8", np.float32),
-            ("sggx_9", np.float32),
+            ("sxx", np.float32),
+            ("sxy", np.float32),
+            ("sxz", np.float32),
+            ("syy", np.float32),
+            ("syz", np.float32),
+            ("szz", np.float32),
         ]
 
         for i in range(self.att_sh.shape[1]):

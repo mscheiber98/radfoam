@@ -213,11 +213,13 @@ def train(args, pipeline_args, model_args, optimizer_args, dataset_args):
                 event = torch.cuda.Event()
                 event.record()
                 loss.backward()
+
                 event.synchronize()
                 ray_batch, rgb_batch, alpha_batch = next(data_iterator)
 
                 model.optimizer.step()
                 model.update_learning_rate(i)
+
 
                 train.set_postfix(color_loss=f"{color_loss.mean().item():.5f}")
 
@@ -297,10 +299,9 @@ def train(args, pipeline_args, model_args, optimizer_args, dataset_args):
 
                 if i == optimizer_args.freeze_points:
                     model.update_triangulation(incremental=False)
-
+                
                 if viewer is not None and viewer.is_closed():
                     break
-
         print(f"Saving Results to {out_dir}")
         model.save_ply(f"{out_dir}/scene.ply")
         model.save_pt(f"{out_dir}/model.pt")
