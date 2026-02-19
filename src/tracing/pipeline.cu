@@ -34,7 +34,8 @@ __global__ void forward(TraceSettings settings,
         return;
 
     constexpr int sh_dim = 3 * (1 + sh_degree) * (1 + sh_degree);
-    constexpr int attr_memory_size = 1 + sh_dim;
+    constexpr int sggx_dim = 6;
+    constexpr int attr_memory_size = 1 + sh_dim + sggx_dim;
 
     Ray ray = rays[thread_idx];
     ray.direction /= ray.direction.norm();
@@ -158,7 +159,8 @@ __global__ void backward(TraceSettings settings,
         return;
 
     constexpr int sh_dim = 3 * (1 + sh_degree) * (1 + sh_degree);
-    constexpr int attr_memory_size = 1 + sh_dim;
+    constexpr int sggx_dim = 6;
+    constexpr int attr_memory_size = 1 + sh_dim + sggx_dim;
 
     Ray ray = rays[thread_idx];
     ray.direction /= ray.direction.norm();
@@ -169,14 +171,27 @@ __global__ void backward(TraceSettings settings,
 
     auto sh_coeffs = sh_coefficients<sh_degree>(ray.direction);
 
-    auto load_attributes = [&](uint32_t v_idx, Vec3f &rgb, float &s) {
+    auto load_attributes = [&](uint32_t v_idx, Vec3f &rgb, float &s, float &s_view) {
         const attr_scalar *attr_ptr = attributes + v_idx * attr_memory_size;
-        s = (float)attr_ptr[attr_memory_size - 1];
+        s = (float)attr_ptr[attr_memory_size - (1 + sggx_dim)];
         if (s > 1e-6f) {
             rgb = load_sh_as_rgb<attr_scalar, sh_degree>(sh_coeffs, attr_ptr);
         } else {
             rgb = Vec3f::Zero();
         }
+
+        float sxx = (float)attr_ptr[attr_memory_size - (1 + sggx_dim) + 1];
+        float sxy = (float)attr_ptr[attr_memory_size - (1 + sggx_dim) + 2];
+        float sxz = (float)attr_ptr[attr_memory_size - (1 + sggx_dim) + 3];
+        float syy = (float)attr_ptr[attr_memory_size - (1 + sggx_dim) + 4];
+        float syz = (float)attr_ptr[attr_memory_size - (1 + sggx_dim) + 5];
+        float szz = (float)attr_ptr[attr_memory_size - (1 + sggx_dim) + 6];
+
+        Mat3f sggx;
+        sggx << sxx,sxy,sxz,sxy,syy,syz,szz,syz,szz;
+        
+        Vec3f dir = ray.direction.normalized();
+        s_view = dir.transposed() * sggx * dir;
     };
 
     Vec4f rgba_grad, rgba;
@@ -203,8 +218,27 @@ __global__ void backward(TraceSettings settings,
             uint32_t point_idx =
                 quantile_point_indices[thread_idx * num_depth_quantiles + i];
             float s = (float)
-                attributes[point_idx * attr_memory_size + attr_memory_size - 1];
-            current_depth_grad += ray_depth_grad[i] / s;
+                attributes[point_idx * attr_memory_size + attr_memory_size - (1 + sggx_dim)];
+            float sxx = (float)
+                attributes[point_idx * attr_memory_size + attr_memory_size - (1 + sggx_dim) + 1];
+            float sxy = (float)
+                attributes[point_idx * attr_memory_size + attr_memory_size - (1 + sggx_dim) + 2];
+            float sxz = (float)
+                attributes[point_idx * attr_memory_size + attr_memory_size - (1 + sggx_dim) + 2];
+            float syy = (float)
+                attributes[point_idx * attr_memory_size + attr_memory_size - (1 + sggx_dim) + 3];
+            float syz = (float)
+                attributes[point_idx * attr_memory_size + attr_memory_size - (1 + sggx_dim) + 4];
+            float szz = (float)
+                attributes[point_idx * attr_memory_size + attr_memory_size - (1 + sggx_dim) + 5];
+
+            Mat3f sggx;
+            sggx << sxx,sxy,sxz,sxy,syy,syz,szz,syz,szz;
+            
+            Vec3f dir = ray.direction.normalized();
+            s_view = dir.transposed() * sggx * dir;
+
+            current_depth_grad += ray_depth_grad[i] / softplus(s + s_view);
         }
     }
 
@@ -225,11 +259,12 @@ __global__ void backward(TraceSettings settings,
                        const Vec3f &next_point) {
         Vec3f rgb_primal;
         float s;
+        float s_view;
 
-        load_attributes(point_idx, rgb_primal, s);
+        load_attributes(point_idx, rgb_primal, s, s_view);
 
-        float s_primal = softplus(s);
-        float ds_primal_ds = dsoftplus(s);
+        float s_primal = softplus(s + s_view);
+        float ds_primal_ds_plus_sview = dsoftplus(s + s_view);
 
 
         float delta_t = fmaxf(t_1 - t_0, 0.0f);
@@ -330,10 +365,14 @@ __global__ void backward(TraceSettings settings,
             dL_drgb_primal,
             attribute_grad + point_idx * attr_memory_size);
 
-        float dL_ds = dL_ds_primal * ds_primal_ds;
+        float dL_ds_plus_sview = dL_ds_primal * ds_primal_ds_plus_sview;
         atomicAdd(attribute_grad + point_idx * attr_memory_size +
-                      (attr_memory_size - 1),
-                  (attr_scalar)dL_ds);
+                      (attr_memory_size - 1 - sggx_dim),
+                  (attr_scalar)dL_ds_plus_sview);
+
+        write_density_grad_to_sggx<attr_scalar>(ray.direction,
+        dL_ds_plus_sview,
+        attribute_grad + point_idx * attr_memory_size + (attr_memory_size - sggx_dim));
 
         return transmittance > settings.weight_threshold;
     };
@@ -372,7 +411,8 @@ visualization(TraceSettings settings,
         return;
 
     constexpr int sh_dim = 3 * (1 + sh_degree) * (1 + sh_degree);
-    constexpr int attr_memory_size = 1 + sh_dim;
+    constexpr int sggx_dim = 6;
+    constexpr int attr_memory_size = 1 + sh_dim + sggx_dim;
 
     Ray ray = cast_ray(camera, pix_i, pix_j);
     if (ray.direction.norm() < 0.1f) {
@@ -382,15 +422,28 @@ visualization(TraceSettings settings,
 
     auto sh_coeffs = sh_coefficients<sh_degree>(ray.direction);
 
-    auto load_attributes = [&](uint32_t v_idx, Vec3f &rgb, float &s) {
-        const attr_scalar *attr_ptr = attributes + v_idx * attr_memory_size;
-        s = (float)attr_ptr[attr_memory_size - 1];
-        if (s > 1e-6f) {
-            rgb = load_sh_as_rgb<attr_scalar, sh_degree>(sh_coeffs, attr_ptr);
-        } else {
-            rgb = Vec3f::Zero();
-        }
-    };
+    auto load_attributes = [&](uint32_t v_idx, Vec3f &rgb, float &s, float &s_view) {
+            const attr_scalar *attr_ptr = attributes + v_idx * attr_memory_size;
+            s = (float)attr_ptr[attr_memory_size - (1 + sggx_dim)];
+            if (s > 1e-6f) {
+                rgb = load_sh_as_rgb<attr_scalar, sh_degree>(sh_coeffs, attr_ptr);
+            } else {
+                rgb = Vec3f::Zero();
+            }
+
+            float sxx = (float)attr_ptr[attr_memory_size - (1 + sggx_dim) + 1];
+            float sxy = (float)attr_ptr[attr_memory_size - (1 + sggx_dim) + 2];
+            float sxz = (float)attr_ptr[attr_memory_size - (1 + sggx_dim) + 3];
+            float syy = (float)attr_ptr[attr_memory_size - (1 + sggx_dim) + 4];
+            float syz = (float)attr_ptr[attr_memory_size - (1 + sggx_dim) + 5];
+            float szz = (float)attr_ptr[attr_memory_size - (1 + sggx_dim) + 6];
+
+            Mat3f sggx;
+            sggx << sxx,sxy,sxz,sxy,syy,syz,szz,syz,szz;
+            
+            Vec3f dir = ray.direction.normalized();
+            s_view = dir.transposed() * sggx * dir;
+        };
 
     float transmittance = 1.0f;
     Vec3f accumulated_rgb = Vec3f::Zero();
@@ -403,11 +456,12 @@ visualization(TraceSettings settings,
                        const Vec3f &current_point,
                        const Vec3f &next_point) {
         Vec3f rgb_primal;
-        float s_primal;
+        float s;
+        float s_view;
 
-        load_attributes(point_idx, rgb_primal, s_primal);
+        load_attributes(point_idx, rgb_primal, s, s_view);
 
-        s_primal = softplus(s_primal);
+        float s_primal = softplus(s + s_view);
 
 
         float delta_t = fmaxf(t_1 - t_0, 0.0f);
@@ -499,7 +553,8 @@ __global__ void benchmark(TraceSettings settings,
         return;
 
     constexpr int sh_dim = 3 * (1 + sh_degree) * (1 + sh_degree);
-    constexpr int attr_memory_size = 1 + sh_dim;
+    constexpr int sggx_dim = 6;
+    constexpr int attr_memory_size = 1 + sh_dim + sggx_dim;
 
     Ray ray = cast_ray(camera, pix_i, pix_j);
     if (ray.direction.norm() < 0.1f) {
@@ -509,15 +564,28 @@ __global__ void benchmark(TraceSettings settings,
 
     auto sh_coeffs = sh_coefficients<sh_degree>(ray.direction);
 
-    auto load_attributes = [&](uint32_t v_idx, Vec3f &rgb, float &s) {
-        const attr_scalar *attr_ptr = attributes + v_idx * attr_memory_size;
-        s = (float)attr_ptr[attr_memory_size - 1];
-        if (s > 1e-6f) {
-            rgb = load_sh_as_rgb<attr_scalar, sh_degree>(sh_coeffs, attr_ptr);
-        } else {
-            rgb = Vec3f::Zero();
-        }
-    };
+    auto load_attributes = [&](uint32_t v_idx, Vec3f &rgb, float &s, float &s_view) {
+            const attr_scalar *attr_ptr = attributes + v_idx * attr_memory_size;
+            s = (float)attr_ptr[attr_memory_size - (1 + sggx_dim)];
+            if (s > 1e-6f) {
+                rgb = load_sh_as_rgb<attr_scalar, sh_degree>(sh_coeffs, attr_ptr);
+            } else {
+                rgb = Vec3f::Zero();
+            }
+
+            float sxx = (float)attr_ptr[attr_memory_size - (1 + sggx_dim) + 1];
+            float sxy = (float)attr_ptr[attr_memory_size - (1 + sggx_dim) + 2];
+            float sxz = (float)attr_ptr[attr_memory_size - (1 + sggx_dim) + 3];
+            float syy = (float)attr_ptr[attr_memory_size - (1 + sggx_dim) + 4];
+            float syz = (float)attr_ptr[attr_memory_size - (1 + sggx_dim) + 5];
+            float szz = (float)attr_ptr[attr_memory_size - (1 + sggx_dim) + 6];
+
+            Mat3f sggx;
+            sggx << sxx,sxy,sxz,sxy,syy,syz,szz,syz,szz;
+            
+            Vec3f dir = ray.direction.normalized();
+            s_view = dir.transposed() * sggx * dir;
+        };
 
     float transmittance = 1.0f;
     Vec3f accumulated_rgb = Vec3f::Zero();
@@ -528,11 +596,12 @@ __global__ void benchmark(TraceSettings settings,
                        const Vec3f &current_point,
                        const Vec3f &next_point) {
         Vec3f rgb_primal;
-        float s_primal;
+        float s;
+        float s_view
 
-        load_attributes(point_idx, rgb_primal, s_primal);
+        load_attributes(point_idx, rgb_primal, s, s_view);
 
-        s_primal = softplus(s_primal);
+        float s_primal = softplus(s + s_view);
 
 
         float delta_t = fmaxf(t_1 - t_0, 0.0f);
