@@ -38,7 +38,12 @@ class RadFoamScene(torch.nn.Module):
             self.initialize_from_pcd(points, points_colors)
         else:
             self.random_initialize()
+            
+        # We make a distinction between the SH parameters of the constant and view-dependent terms
+        # this way we can set different learning rates for view-independent and view-dependent color
 
+        # coefficients for the spherical harmonics of degree 0
+        # these represent the constant color term, which is view-independent
         self.att_dc = nn.Parameter(
             torch.zeros(
                 self.num_init_points,
@@ -47,6 +52,9 @@ class RadFoamScene(torch.nn.Module):
                 dtype=self.attr_dtype,
             )
         )
+        
+        # coefficients for higher order spherical harmonics (<0)
+        # these represent the view-dependent color
         self.att_sh = nn.Parameter(
             torch.zeros(
                 self.num_init_points,
@@ -62,6 +70,9 @@ class RadFoamScene(torch.nn.Module):
         primal_points = (
             torch.randn(self.num_init_points, 3, device=self.device) * 25
         )
+        
+        # in the triangulation process, it can happen that the order of the primal points is optimized
+        # in this case, we have to reorder the "primal_points" of the model to fit the triangulation
         self.triangulation = radfoam.Triangulation(primal_points)
         perm = self.triangulation.permutation().to(torch.long)
         primal_points = primal_points[perm]
@@ -69,61 +80,74 @@ class RadFoamScene(torch.nn.Module):
         self.primal_points = nn.Parameter(primal_points)
         self.faces = None
 
-        self.update_triangulation(rebuild=False)
+        #self.update_triangulation(rebuild=False)
 
-        self.att_dc = nn.Parameter(
-            torch.zeros(
-                self.num_init_points,
-                3,
-                device=self.device,
-                dtype=self.attr_dtype,
-            )
-        )
+        #self.att_dc = nn.Parameter(
+        #    torch.zeros(
+        #        self.num_init_points,
+        #        3,
+        #        device=self.device,
+        #        dtype=self.attr_dtype,
+        #    )
+        #)
 
+        # INITIALIZE THE DENSITY PARAMETERS
         density = torch.zeros(
             self.num_init_points, 1, device=self.device, dtype=self.attr_dtype
         )
+        sggx = torch.zeros(self.num_init_points, 6, device=self.device)
+        
         self.density = nn.Parameter(density[perm])
+        self.sggx = nn.Parameter(sggx[perm])
+        
+        # we call this to build the AABB tree and the point adjacency data
+        self.update_triangulation(rebuild=False)
+        
 
     def initialize_from_pcd(self, points, points_colors):
-        points = points.to(self.device)
-        points_colors = points_colors.to(self.device)
+            
+            #use 90 percent of the point cloud plus 5000 random points for initialization of primal points
+            points = points.to(self.device)
+            ##points_colors = points_colors.to(self.device)
+            num_random = 5_000
+            random = torch.randn([num_random, 3], device=self.device) * 10
+            num_samples = int(0.9 * points.shape[0])
+            print(
+                f"Starting with {num_samples} points from {points.shape[0]} COLMAP points"
+            )
+            points_idx = torch.randint(0, points.shape[0], (num_samples,))
+            samp_points = points[points_idx]
+            samp_points += torch.randn_like(samp_points) * 1e-2
+            ##samp_colors = points_colors[points_idx]
 
-        num_random = 5_000
-        random = torch.randn([num_random, 3], device=self.device) * 10
+            # create the parameter tensors
+            primal_points = torch.cat([samp_points, random], dim=0)       
+            density = torch.cat(
+                [
+                    torch.rand(samp_points.shape[0], 1, dtype=self.attr_dtype),
+                    -0.5 * torch.ones(num_random, 1, dtype=self.attr_dtype),
+                ],
+                dim=0,
+            ).to(self.device)
+            self.num_init_points = primal_points.shape[0]
+            sggx = torch.tensor([1.0, 0.0, 0.0, 1.0, 0.0, 1.0],dtype=self.attr_dtype).to(self.device)
+            sggx = sggx.repeat(self.num_init_points, 1)
+            
+            # build the triangulation
+            self.triangulation = radfoam.Triangulation(primal_points)
+            
+            # the order of primal points can be changed by the triangulation for optimization reasons
+            # we propagate the new point order to the model parameters to fit the triangulation point order
+            perm = self.triangulation.permutation().to(torch.long)
+            # register the parameter tensors as learnable parameters
+            self.primal_points = nn.Parameter(primal_points[perm])
+            self.density = nn.Parameter(density[perm])
+            self.sggx = nn.Parameter(sggx[perm])
+            self.faces = None
+            # we call this to build the AABB tree and the point adjacency data
+            self.update_triangulation(rebuild=False)
 
-        num_samples = int(0.9 * points.shape[0])
-        print(
-            f"Starting with {num_samples} points from {points.shape[0]} COLMAP points"
-        )
-        points_idx = torch.randint(0, points.shape[0], (num_samples,))
-        samp_points = points[points_idx]
-        samp_points += torch.randn_like(samp_points) * 1e-2
-        samp_colors = points_colors[points_idx]
-
-        primal_points = torch.cat([samp_points, random], dim=0)
-        primal_density = torch.cat(
-            [
-                torch.rand(samp_colors.shape[0], 1, dtype=self.attr_dtype),
-                -0.5 * torch.ones(num_random, 1, dtype=self.attr_dtype),
-            ],
-            dim=0,
-        ).to(self.device)
-
-        torch.cuda.empty_cache()
-
-        self.triangulation = radfoam.Triangulation(primal_points)
-        perm = self.triangulation.permutation().to(torch.long)
-        primal_points = primal_points[perm]
-
-        self.primal_points = nn.Parameter(primal_points)
-        self.faces = None
-
-        self.update_triangulation(rebuild=False)
-
-        self.density = nn.Parameter(primal_density)
-        self.num_init_points = self.primal_points.shape[0]
-
+    # reorders per point data (position, density, sh coeffs, sggx and their optimizer states) to fit a primal point index permutation
     def permute_points(self, permutation):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
@@ -156,7 +180,11 @@ class RadFoamScene(torch.nn.Module):
         self.density = optimizable_tensors["density"]
         self.att_dc = optimizable_tensors["att_dc"]
         self.att_sh = optimizable_tensors["att_sh"]
+        
+        #ALSO HERE VOD PARAMETERS
+        self.sggx = optimizable_tensors["sggx"]
 
+    # build the triangulation and auxiliarry data structure (aabb tree and adjacency data)
     def update_triangulation(self, rebuild=True, incremental=False):
         if not self.primal_points.isfinite().all():
             raise RuntimeError("NaN in points")
@@ -205,13 +233,25 @@ class RadFoamScene(torch.nn.Module):
 
     def get_primal_attributes(self):
         return torch.cat([self.att_dc, self.att_sh], dim=-1)
-
+    
+    # VOD PARAMETERS
+    def get_primal_sggx(self):
+        return self.sggx
+    
     def get_trace_data(self):
+        
         points = self.primal_points
+        #attributes = torch.cat(
+        #    [self.get_primal_attributes(), self.get_primal_density()],
+        #    dim=-1,
+        #).to(self.attr_dtype)
+        
+        # ADD VOD PARAMETERS
         attributes = torch.cat(
-            [self.get_primal_attributes(), self.get_primal_density()],
+            [self.get_primal_attributes(), self.get_primal_density(), self.get_primal_sggx()],
             dim=-1,
         ).to(self.attr_dtype)
+        
         point_adjacency = self.point_adjacency
         point_adjacency_offsets = self.point_adjacency_offsets
 
@@ -295,6 +335,13 @@ class RadFoamScene(torch.nn.Module):
                 "lr": args.attributes_lr_init,
                 "name": "att_sh",
             },
+            # VOD PARAMETERS
+            {
+                "params": self.sggx,
+                # use 1/4 of original density learning rate like in the VoD 3DGS paper
+                "lr": 0.25 * args.density_lr_init,
+                "name": "sggx",
+            },
         ]
 
         self.optimizer = torch.optim.Adam(params, eps=1e-15)
@@ -320,6 +367,14 @@ class RadFoamScene(torch.nn.Module):
             warmup_steps=max_iterations // 5,
             max_steps=max_iterations,
         )
+        
+        # VOD PARAMETERS
+        self.sggx_scheduler_args = get_cosine_lr_func(
+            lr_init= args.density_lr_init,
+            lr_final= args.density_lr_final,
+            warmup_steps=warmup,
+            max_steps=max_iterations,
+        )
 
     def update_learning_rate(self, iteration):
         """Learning rate scheduling per step"""
@@ -330,12 +385,16 @@ class RadFoamScene(torch.nn.Module):
             elif param_group["name"] == "density":
                 lr = self.den_scheduler_args(iteration)
                 param_group["lr"] = lr
-                param_group["lr"] = lr
             elif param_group["name"] == "att_dc":
                 lr = self.attr_dc_scheduler_args(iteration)
                 param_group["lr"] = lr
             elif param_group["name"] == "att_sh":
                 lr = self.attr_rest_scheduler_args(iteration)
+                param_group["lr"] = lr
+            
+            # VOD PARAMETERS
+            elif param_group["name"] == "sggx":
+                lr = self.sggx_scheduler_args(iteration)
                 param_group["lr"] = lr
 
     def prune_optimizer(self, mask):
@@ -367,6 +426,9 @@ class RadFoamScene(torch.nn.Module):
         self.att_dc = optimizable_tensors["att_dc"]
         self.att_sh = optimizable_tensors["att_sh"]
         self.density = optimizable_tensors["density"]
+        
+        # VOD PARAMETERS
+        self.sggx = optimizable_tensors["sggx"]
 
     def cat_tensors_to_optimizer(self, new_params):
         optimizable_tensors = {}
@@ -419,6 +481,9 @@ class RadFoamScene(torch.nn.Module):
         self.att_dc = optimizable_tensors["att_dc"]
         self.att_sh = optimizable_tensors["att_sh"]
         self.density = optimizable_tensors["density"]
+        
+        # VOD PARAMETERS
+        self.sggx = optimizable_tensors["sggx"]
 
     def prune_and_densify(
         self, point_error, point_contribution, upsample_factor=1.2
@@ -479,6 +544,9 @@ class RadFoamScene(torch.nn.Module):
                 "att_dc": self.att_dc[sampled_inds],
                 "att_sh": self.att_sh[sampled_inds],
                 "density": self.density[sampled_inds],
+                
+                # VOD PARAMETERS
+                "sggx": self.sggx[sampled_inds],
             }
 
             prune_mask = torch.cat(
@@ -570,6 +638,9 @@ class RadFoamScene(torch.nn.Module):
             np.clip(255 * (0.5 + C0 * color_attributes[:, 2]), 0, 255),
             dtype=np.uint8,
         )
+        
+        # VOD PARAMETERS
+        sggx = self.get_primal_sggx().detach().float().cpu().numpy()
 
         vertex_data = []
         for i in tqdm.trange(points.shape[0]):
@@ -587,6 +658,14 @@ class RadFoamScene(torch.nn.Module):
                         color_attributes[i, 3 + j]
                         for j in range(color_attributes.shape[1] - 3)
                     ],
+                    
+                    # VOD PARAMETERS
+                    sggx[i, 0],
+                    sggx[i, 1],
+                    sggx[i, 2],
+                    sggx[i, 3],
+                    sggx[i, 4],
+                    sggx[i, 5],
                 )
             )
 
@@ -599,6 +678,13 @@ class RadFoamScene(torch.nn.Module):
             ("blue", np.uint8),
             ("density", np.float32),
             ("adjacency_offset", np.uint32),
+            # VOD PARAMETERS
+            ("sxx", np.float32),
+            ("sxy", np.float32),
+            ("sxz", np.float32),
+            ("syy", np.float32),
+            ("syz", np.float32),
+            ("szz", np.float32),
         ]
 
         for i in range(self.att_sh.shape[1]):
@@ -620,6 +706,9 @@ class RadFoamScene(torch.nn.Module):
         adjacency = self.point_adjacency.cpu()
         adjacency_offsets = self.point_adjacency_offsets.cpu()
 
+        # VOD PARAMETERS
+        sggx = self.get_primal_sggx().detach().float().cpu()
+
         scene_data = {
             "xyz": points,
             "density": density,
@@ -627,6 +716,9 @@ class RadFoamScene(torch.nn.Module):
             "color_sh": color_sh,
             "adjacency": adjacency.long(),
             "adjacency_offsets": adjacency_offsets.long(),
+            
+            # VOD PARAMETERS
+            "sggx": sggx,
         }
         torch.save(scene_data, pt_path)
 
@@ -638,6 +730,9 @@ class RadFoamScene(torch.nn.Module):
         self.att_dc = nn.Parameter(
             scene_data["color_dc"].to(self.attr_dtype).to(self.device)
         )
+        
+        # VOD PARAMETERS
+        self.sggx = nn.Parameter(scene_data["sggx"].to(self.attr_dtype).to(self.device))
 
         exp_sh_coeffs = 3 * ((1 + self.sh_degree) * (1 + self.sh_degree) - 1)
         got_sh_coeffs = scene_data["color_sh"].shape[-1]
