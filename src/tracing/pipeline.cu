@@ -69,9 +69,11 @@ __global__ void forward(TraceSettings settings,
                        const Vec3f &current_point,
                        const Vec3f &next_point) {
         Vec3f rgb_primal;
-        float s_primal;
+        float s;
 
-        load_attributes(point_idx, rgb_primal, s_primal);
+        load_attributes(point_idx, rgb_primal, s);
+
+        float s_primal = softplus(s);
 
         float delta_t = fmaxf(t_1 - t_0, 0.0f);
         float alpha = 1 - expf(-s_primal * delta_t);
@@ -222,9 +224,13 @@ __global__ void backward(TraceSettings settings,
                        const Vec3f &current_point,
                        const Vec3f &next_point) {
         Vec3f rgb_primal;
-        float s_primal;
+        float s;
 
-        load_attributes(point_idx, rgb_primal, s_primal);
+        load_attributes(point_idx, rgb_primal, s);
+
+        float s_primal = softplus(s);
+        float ds_primal_ds = dsoftplus(s);
+
 
         float delta_t = fmaxf(t_1 - t_0, 0.0f);
         float alpha = 1 - expf(-s_primal * delta_t);
@@ -323,9 +329,11 @@ __global__ void backward(TraceSettings settings,
             sh_coeffs,
             dL_drgb_primal,
             attribute_grad + point_idx * attr_memory_size);
+
+        float dL_ds = dL_ds_primal * ds_primal_ds;
         atomicAdd(attribute_grad + point_idx * attr_memory_size +
                       (attr_memory_size - 1),
-                  (attr_scalar)dL_ds_primal);
+                  (attr_scalar)dL_ds);
 
         return transmittance > settings.weight_threshold;
     };
@@ -398,6 +406,9 @@ visualization(TraceSettings settings,
         float s_primal;
 
         load_attributes(point_idx, rgb_primal, s_primal);
+
+        s_primal = softplus(s_primal);
+
 
         float delta_t = fmaxf(t_1 - t_0, 0.0f);
         float alpha = 1 - expf(-s_primal * delta_t);
@@ -520,6 +531,9 @@ __global__ void benchmark(TraceSettings settings,
         float s_primal;
 
         load_attributes(point_idx, rgb_primal, s_primal);
+
+        s_primal = softplus(s_primal);
+
 
         float delta_t = fmaxf(t_1 - t_0, 0.0f);
         float alpha = 1 - expf(-s_primal * delta_t);

@@ -128,5 +128,55 @@ inline __device__ Vec3f colormap(float v,
     i1 = max(0, min(i1, map_len - 1));
     return map_vals[i0] * (1.0f - t) + map_vals[i1] * t;
 }
+template <typename scalar>
+__device__ void write_density_grad_to_sggx(const Vec3f &dir, //viewing direction i.e. ray direction (normalized)
+                                    float dL_ds_primal, // Loss gradient w.r.t. cell density
+                                    scalar *sggx_grad) {
+    //sxx
+    atomicAdd(sggx_grad + 0, (scalar)(dir[0]*dir[0] * dL_ds_primal));
+    //sxy
+    atomicAdd(sggx_grad + 1, (scalar)(2.0*dir[0]*dir[1] * dL_ds_primal));
+    //sxz
+    atomicAdd(sggx_grad + 2, (scalar)(2.0*dir[0]*dir[2] * dL_ds_primal));
+    //syy
+    atomicAdd(sggx_grad + 3, (scalar)(dir[1]*dir[1] * dL_ds_primal));
+    //syz
+    atomicAdd(sggx_grad + 4, (scalar)(2.0*dir[1]*dir[2] * dL_ds_primal));
+    //szz
+    atomicAdd(sggx_grad + 5, (scalar)(dir[2]*dir[2] * dL_ds_primal));
+
+}
+
+__device__ float sigmoid(float x) {
+    if (x >= 0) {
+        float exp_neg_x = expf(-x);
+        return 1.0f / (1.0f + exp_neg_x);
+    } else {
+        float exp_x = expf(x);
+        return exp_x / (1.0f + exp_x);
+    }
+}
+
+__device__ float dsigmoid(float x) {
+    return sigmoid(x) * (1.0 - sigmoid(x));
+}
+
+__device__ float softplus(float x, float beta = 10.0f){ 
+    float threshold = 20.0;
+    float bx = beta *x;
+
+    if (bx > threshold) {
+        return x;  // log(1 + exp(bx)) / beta ≈ x
+    } else if (bx < -20.0f) {
+        return 0.0f;  // exp(bx) ≈ 0
+    }
+    
+    return (1.0f / beta) * log1pf(expf(bx));
+}
+
+__device__ float dsoftplus (float x, float beta = 10.0f){
+    float bx = beta *x;
+    return sigmoid(bx);
+}
 
 } // namespace radfoam
