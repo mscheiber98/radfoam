@@ -191,7 +191,7 @@ __global__ void backward(TraceSettings settings,
         sggx << sxx,sxy,sxz,sxy,syy,syz,szz,syz,szz;
         
         Vec3f dir = ray.direction.normalized();
-        s_view = dir.transposed() * sggx * dir;
+        s_view = dir.transpose() * sggx * dir;
     };
 
     Vec4f rgba_grad, rgba;
@@ -236,7 +236,7 @@ __global__ void backward(TraceSettings settings,
             sggx << sxx,sxy,sxz,sxy,syy,syz,szz,syz,szz;
             
             Vec3f dir = ray.direction.normalized();
-            s_view = dir.transposed() * sggx * dir;
+            float s_view = dir.transpose() * sggx * dir;
 
             current_depth_grad += ray_depth_grad[i] / softplus(s + s_view);
         }
@@ -442,7 +442,7 @@ visualization(TraceSettings settings,
             sggx << sxx,sxy,sxz,sxy,syy,syz,szz,syz,szz;
             
             Vec3f dir = ray.direction.normalized();
-            s_view = dir.transposed() * sggx * dir;
+            s_view = dir.transpose() * sggx * dir;
         };
 
     float transmittance = 1.0f;
@@ -584,7 +584,7 @@ __global__ void benchmark(TraceSettings settings,
             sggx << sxx,sxy,sxz,sxy,syy,syz,szz,syz,szz;
             
             Vec3f dir = ray.direction.normalized();
-            s_view = dir.transposed() * sggx * dir;
+            s_view = dir.transpose() * sggx * dir;
         };
 
     float transmittance = 1.0f;
@@ -597,7 +597,7 @@ __global__ void benchmark(TraceSettings settings,
                        const Vec3f &next_point) {
         Vec3f rgb_primal;
         float s;
-        float s_view
+        float s_view;
 
         load_attributes(point_idx, rgb_primal, s, s_view);
 
