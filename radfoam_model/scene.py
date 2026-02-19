@@ -228,7 +228,7 @@ class RadFoamScene(torch.nn.Module):
         )
 
     def get_primal_density(self):
-        return self.activation_scale * F.softplus(self.density, beta=10)
+        #return self.activation_scale * F.softplus(self.density, beta=10)
         return self.density
 
     def get_primal_attributes(self):

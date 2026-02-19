@@ -177,4 +177,27 @@ __device__ float sigmoid(float x) {
     }
 }
 
+__device__ float dsigmoid(float x) {
+    return sigmoid(x) * (1.0 - sigmoid(x));
+}
+
+__device__ float softplus(float x, float beta = 10.0f){ 
+    float threshold = 20.0;
+    float bx = beta *x;
+
+    if (bx > threshold) {
+        return x;  // log(1 + exp(bx)) / beta ≈ x
+    } else if (bx < -20.0f) {
+        return 0.0f;  // exp(bx) ≈ 0
+    }
+    
+    return (1.0f / beta) * log1pf(expf(bx));
+}
+
+__device__ float dsoftplus (float x, float beta = 10.0f){
+    float bx = beta *x;
+    return sigmoid(bx);
+}
+
+
 } // namespace radfoam
