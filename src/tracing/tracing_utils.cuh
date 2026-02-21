@@ -148,17 +148,38 @@ inline __device__ Vec3f colormap(float v,
     return map_vals[i0] * (1.0f - t) + map_vals[i1] * t;
 }
 
-template <typename scalar>
-__device__ void write_density_grad_to_sggx(const Vec3f &dir, //viewing direction i.e. ray direction (normalized)
-                                    float dL_ds_primal, // Loss gradient w.r.t. cell density
-                                    scalar *sggx_grad) {
-    for (uint32_t i = 0; i < 9; ++i) {
-        //row index of sggx matrix
-        int row = i/3;
-        //column index of sggx matrix
-        int col = i % 3;
-        atomicAdd(sggx_grad + i, (scalar)(dir[row]*dir[col] * dL_ds_primal));
+inline __device__ float sigmoid(float x){
+    if (x >= 0.0f) {
+        return 1.0f / (1.0f + expf(-x));
+    } else {
+        float exp_x = expf(x);
+        return exp_x / (1.0f + exp_x);
     }
 }
+
+inline __device__ float softplus(float x, float beta = 10.0f, float threshold = 20.0f){
+    float bx = beta *x;
+
+    if (bx > threshold){
+        return x;
+    }
+
+    else {
+        return 1/beta * log1pf(expf(bx))
+    }
+}
+
+inline __device__ float d_softplus(float x, float beta = 10.0f, float threshold = 20.0f){
+    float bx = beta*x;
+
+    if (bx > threshold){
+        return 1.0f;
+    }
+    else{
+        return sigmoid(bx);
+    }
+}
+
+
 
 } // namespace radfoam

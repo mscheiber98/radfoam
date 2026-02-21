@@ -63,6 +63,24 @@ class RadFoamScene(torch.nn.Module):
                 dtype=self.attr_dtype,
             )
         )
+        
+        ## NOW THE SAME FOR DENSITY
+        self.att_dc_density = nn.Parameter(
+            torch.zeros(
+                self.num_init_points,
+                1,
+                device=self.device,
+                dtype=self.attr_dtype,
+            )
+        )
+        self.att_sh_density = nn.Parameter(
+            torch.zeros(
+                self.num_init_points,
+                ((1 + self.sh_degree) * (1 + self.sh_degree) - 1),
+                device=device,
+                dtype=self.attr_dtype,
+            )
+        )
 
         self.pipeline = radfoam.create_pipeline(self.sh_degree, self.attr_dtype)
 
@@ -79,26 +97,6 @@ class RadFoamScene(torch.nn.Module):
 
         self.primal_points = nn.Parameter(primal_points)
         self.faces = None
-
-        #self.update_triangulation(rebuild=False)
-
-        #self.att_dc = nn.Parameter(
-        #    torch.zeros(
-        #        self.num_init_points,
-        #        3,
-        #        device=self.device,
-        #        dtype=self.attr_dtype,
-        #    )
-        #)
-
-        # INITIALIZE THE DENSITY PARAMETERS
-        density = torch.zeros(
-            self.num_init_points, 1, device=self.device, dtype=self.attr_dtype
-        )
-        sggx = torch.zeros(self.num_init_points, 9, device=self.device)
-        
-        self.density = nn.Parameter(density[perm])
-        self.sggx = nn.Parameter(sggx[perm])
         
         # we call this to build the AABB tree and the point adjacency data
         self.update_triangulation(rebuild=False)
@@ -122,20 +120,10 @@ class RadFoamScene(torch.nn.Module):
 
         # create the parameter tensors
         primal_points = torch.cat([samp_points, random], dim=0)       
-        density = torch.cat(
-            [
-                torch.rand(samp_points.shape[0], 1, dtype=self.attr_dtype),
-                -0.5 * torch.ones(num_random, 1, dtype=self.attr_dtype),
-            ],
-            dim=0,
-        ).to(self.device)
         self.num_init_points = self.primal_points.shape[0]
-        sggx = torch.zeros(self.num_init_points, 9, dtype=self.attr_dtype)
         
         # register the parameter tensors as learnable parameters
         self.primal_points = nn.Parameter(primal_points)
-        self.density = nn.Parameter(density)
-        self.sggx = nn.Parameter(sggx)
         
         # build the triangulation
         self.triangulation = radfoam.Triangulation(primal_points)
@@ -148,7 +136,7 @@ class RadFoamScene(torch.nn.Module):
         # we call this to build the AABB tree and the point adjacency data
         self.update_triangulation(rebuild=False)
 
-    # reorders per point data (position, density, sh coeffs, sggx and their optimizer states) to fit a primal point index permutation
+    # reorders per point data (position, density, sh coeffs and their optimizer states) to fit a primal point index permutation
     def permute_points(self, permutation):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
@@ -178,12 +166,10 @@ class RadFoamScene(torch.nn.Module):
                     optimizable_tensors[group["name"]] = group["params"][0]
 
         self.primal_points = optimizable_tensors["primal_points"]
-        self.density = optimizable_tensors["density"]
         self.att_dc = optimizable_tensors["att_dc"]
         self.att_sh = optimizable_tensors["att_sh"]
-        
-        #ALSO HERE VOD PARAMETERS
-        self.sggx = optimizable_tensors["sggx"]
+        self.att_dc = optimizable_tensors["att_dc_density"]
+        self.att_sh = optimizable_tensors["att_sh_density"]
 
     # build the triangulation and auxiliarry data structure (aabb tree and adjacency data)
     def update_triangulation(self, rebuild=True, incremental=False):
@@ -228,33 +214,18 @@ class RadFoamScene(torch.nn.Module):
             self.triangulation.point_adjacency_offsets()
         )
 
-    def get_primal_density(self):
-        return self.activation_scale * F.softplus(self.density, beta=10)
+    # def get_primal_density(self):
+    #     return self.activation_scale * F.softplus(self.density, beta=10)
 
     def get_primal_attributes(self):
-        return torch.cat([self.att_dc, self.att_sh], dim=-1)
-    
-    # VOD PARAMETERS
-    def get_primal_sggx(self):
-        return self.sggx
+        return torch.cat([self.att_dc, self.att_sh, self.att_dc_density, self.att_sh_density], dim=-1)
     
     def get_trace_data(self):
-        
         points = self.primal_points
-        #attributes = torch.cat(
-        #    [self.get_primal_attributes(), self.get_primal_density()],
-        #    dim=-1,
-        #).to(self.attr_dtype)
-        
-        # ADD VOD PARAMETERS
-        attributes = torch.cat(
-            [self.get_primal_attributes(), self.get_primal_density(), self.get_primal_sggx()],
-            dim=-1,
-        ).to(self.attr_dtype)
-        
+        attributes = self.get_primal_attributes.to(self.attr_dtype)
         point_adjacency = self.point_adjacency
         point_adjacency_offsets = self.point_adjacency_offsets
-
+        
         return points, attributes, point_adjacency, point_adjacency_offsets
 
     def show(self, loop_fn=lambda v: None, iterations=None, **viewer_kwargs):
@@ -320,11 +291,11 @@ class RadFoamScene(torch.nn.Module):
                 "lr": args.points_lr_init,
                 "name": "primal_points",
             },
-            {
-                "params": self.density,
-                "lr": args.density_lr_init,
-                "name": "density",
-            },
+            # {
+            #     "params": self.density,
+            #     "lr": args.density_lr_init,
+            #     "name": "density",
+            # },
             {
                 "params": self.att_dc,
                 "lr": args.attributes_lr_init,
@@ -335,13 +306,17 @@ class RadFoamScene(torch.nn.Module):
                 "lr": args.attributes_lr_init,
                 "name": "att_sh",
             },
-            # VOD PARAMETERS
             {
-                "params": self.sggx,
-                # use 1/4 of original density learning rate like in the VoD 3DGS paper
-                "lr": 0.25* args.density_lr_init,
-                "name": "sggx",
+                "params": self.att_dc_density,
+                "lr": args.attributes_lr_init,
+                "name": "att_dc_density",
             },
+            {
+                "params": self.att_sh_density,
+                "lr": args.attributes_lr_init,
+                "name": "att_sh_density",
+            },
+
         ]
 
         self.optimizer = torch.optim.Adam(params, eps=1e-15)
@@ -350,12 +325,12 @@ class RadFoamScene(torch.nn.Module):
             lr_final=args.points_lr_final,
             max_steps=args.freeze_points,
         )
-        self.den_scheduler_args = get_cosine_lr_func(
-            lr_init=args.density_lr_init,
-            lr_final=args.density_lr_final,
-            warmup_steps=warmup,
-            max_steps=max_iterations,
-        )
+        # self.den_scheduler_args = get_cosine_lr_func(
+        #     lr_init=args.density_lr_init,
+        #     lr_final=args.density_lr_final,
+        #     warmup_steps=warmup,
+        #     max_steps=max_iterations,
+        # )
         self.attr_dc_scheduler_args = get_cosine_lr_func(
             lr_init=args.attributes_lr_init,
             lr_final=args.attributes_lr_final,
@@ -367,14 +342,19 @@ class RadFoamScene(torch.nn.Module):
             warmup_steps=max_iterations // 5,
             max_steps=max_iterations,
         )
-        
         # VOD PARAMETERS
-        self.sggx_scheduler_args = get_cosine_lr_func(
-            lr_init=0.25* args.density_lr_init,
-            lr_final=0.25* args.density_lr_final,
-            warmup_steps=warmup,
+        self.attr_dc_density_scheduler_args = get_cosine_lr_func(
+            lr_init=args.attributes_lr_init,
+            lr_final=args.attributes_lr_final,
             max_steps=max_iterations,
         )
+        self.attr_rest_density_scheduler_args = get_cosine_lr_func(
+            lr_init=args.sh_factor * args.attributes_lr_init,
+            lr_final=args.sh_factor * args.attributes_lr_final,
+            warmup_steps=max_iterations // 5,
+            max_steps=max_iterations,
+        )
+
 
     def update_learning_rate(self, iteration):
         """Learning rate scheduling per step"""
@@ -382,9 +362,9 @@ class RadFoamScene(torch.nn.Module):
             if param_group["name"] == "primal_points":
                 lr = self.xyz_scheduler_args(iteration)
                 param_group["lr"] = lr
-            elif param_group["name"] == "density":
-                lr = self.den_scheduler_args(iteration)
-                param_group["lr"] = lr
+            # elif param_group["name"] == "density":
+            #     lr = self.den_scheduler_args(iteration)
+            #     param_group["lr"] = lr
             elif param_group["name"] == "att_dc":
                 lr = self.attr_dc_scheduler_args(iteration)
                 param_group["lr"] = lr
@@ -393,9 +373,13 @@ class RadFoamScene(torch.nn.Module):
                 param_group["lr"] = lr
             
             # VOD PARAMETERS
-            elif param_group["name"] == "sggx":
-                lr = self.sggx_scheduler_args(iteration)
+            elif param_group["name"] == "att_dc_density":
+                lr = self.attr_dc_density_scheduler_args(iteration)
                 param_group["lr"] = lr
+            elif param_group["name"] == "att_sh_density":
+                lr = self.attr_rest_density_scheduler_args(iteration)
+                param_group["lr"] = lr
+            
 
     def prune_optimizer(self, mask):
         optimizable_tensors = {}
@@ -425,10 +409,9 @@ class RadFoamScene(torch.nn.Module):
         self.primal_points = optimizable_tensors["primal_points"]
         self.att_dc = optimizable_tensors["att_dc"]
         self.att_sh = optimizable_tensors["att_sh"]
-        self.density = optimizable_tensors["density"]
-        
-        # VOD PARAMETERS
-        self.sggx = optimizable_tensors["sggx"]
+        # self.density = optimizable_tensors["density"]
+        self.att_dc = optimizable_tensors["att_dc_density"]
+        self.att_sh = optimizable_tensors["att_sh_density"]
 
     def cat_tensors_to_optimizer(self, new_params):
         optimizable_tensors = {}
@@ -481,9 +464,9 @@ class RadFoamScene(torch.nn.Module):
         self.att_dc = optimizable_tensors["att_dc"]
         self.att_sh = optimizable_tensors["att_sh"]
         self.density = optimizable_tensors["density"]
-        
         # VOD PARAMETERS
-        self.sggx = optimizable_tensors["sggx"]
+        self.att_dc = optimizable_tensors["att_dc_density"]
+        self.att_sh = optimizable_tensors["att_sh_density"]
 
     def prune_and_densify(
         self, point_error, point_contribution, upsample_factor=1.2
@@ -544,9 +527,9 @@ class RadFoamScene(torch.nn.Module):
                 "att_dc": self.att_dc[sampled_inds],
                 "att_sh": self.att_sh[sampled_inds],
                 "density": self.density[sampled_inds],
-                
                 # VOD PARAMETERS
-                "sggx": self.sggx[sampled_inds],
+                "att_dc_density": self.att_dc[sampled_inds],
+                "att_sh_density": self.att_sh[sampled_inds],
             }
 
             prune_mask = torch.cat(
@@ -619,9 +602,11 @@ class RadFoamScene(torch.nn.Module):
     def save_ply(self, ply_path):
         points = self.primal_points.detach().float().cpu().numpy()
         density = self.get_primal_density().detach().float().cpu().numpy()
-        color_attributes = (
+        sh_attributes = (
             self.get_primal_attributes().detach().float().cpu().numpy()
         )
+        color_attributes = sh_attributes[:(3 * (self.sh_degree + 1)*(self.sh_degree + 1))]
+        density_attributes = sh_attributes[(3 * (self.sh_degree + 1)*(self.sh_degree + 1)):]
         adjacency = self.point_adjacency.cpu().numpy()
         adjacency_offsets = self.point_adjacency_offsets.cpu().numpy()
 
@@ -639,8 +624,8 @@ class RadFoamScene(torch.nn.Module):
             dtype=np.uint8,
         )
         
-        # VOD PARAMETERS
-        sggx = self.get_primal_sggx().detach().float().cpu().numpy()
+        # view independent density
+        d = np.array(C0* density_attributes[:,0], dtype=np.uint8)
 
         vertex_data = []
         for i in tqdm.trange(points.shape[0]):
@@ -660,15 +645,6 @@ class RadFoamScene(torch.nn.Module):
                     ],
                     
                     # VOD PARAMETERS
-                    sggx[i, 0],
-                    sggx[i, 1],
-                    sggx[i, 2],
-                    sggx[i, 3],
-                    sggx[i, 4],
-                    sggx[i, 5],
-                    sggx[i, 6],
-                    sggx[i, 7],
-                    sggx[i, 8],
                 )
             )
 
@@ -679,18 +655,9 @@ class RadFoamScene(torch.nn.Module):
             ("red", np.uint8),
             ("green", np.uint8),
             ("blue", np.uint8),
-            ("density", np.float32),
+            # ("density", np.float32),
             ("adjacency_offset", np.uint32),
             # VOD PARAMETERS
-            ("sggx_1", np.float32),
-            ("sggx_2", np.float32),
-            ("sggx_3", np.float32),
-            ("sggx_4", np.float32),
-            ("sggx_5", np.float32),
-            ("sggx_6", np.float32),
-            ("sggx_7", np.float32),
-            ("sggx_8", np.float32),
-            ("sggx_9", np.float32),
         ]
 
         for i in range(self.att_sh.shape[1]):
@@ -706,25 +673,23 @@ class RadFoamScene(torch.nn.Module):
 
     def save_pt(self, pt_path):
         points = self.primal_points.detach().float().cpu()
-        density = self.density.detach().float().cpu()
+        # density = self.density.detach().float().cpu()
         color_dc = self.att_dc.detach().float().cpu()
         color_sh = self.att_sh.detach().float().cpu()
+        density_dc = self.att_dc_density.detach().float().cpu()
+        density_sh = self.att_sh_density.detach().float().cpu()
         adjacency = self.point_adjacency.cpu()
         adjacency_offsets = self.point_adjacency_offsets.cpu()
 
-        # VOD PARAMETERS
-        sggx = self.get_primal_sggx().detach().float().cpu()
-
         scene_data = {
             "xyz": points,
-            "density": density,
+            # "density": density,
             "color_dc": color_dc,
             "color_sh": color_sh,
+            "density_dc": density_dc,
+            "density_sh": density_sh,
             "adjacency": adjacency.long(),
             "adjacency_offsets": adjacency_offsets.long(),
-            
-            # VOD PARAMETERS
-            "sggx": sggx,
         }
         torch.save(scene_data, pt_path)
 
@@ -732,14 +697,11 @@ class RadFoamScene(torch.nn.Module):
         scene_data = torch.load(pt_path)
 
         self.primal_points = nn.Parameter(scene_data["xyz"].to(self.device))
-        self.density = nn.Parameter(scene_data["density"].to(self.device))
+        # self.density = nn.Parameter(scene_data["density"].to(self.device))
         self.att_dc = nn.Parameter(
             scene_data["color_dc"].to(self.attr_dtype).to(self.device)
         )
         
-        # VOD PARAMETERS
-        self.sggx = nn.Parameter(scene_data["sggx"].to(self.attr_dtype).to(self.device))
-
         exp_sh_coeffs = 3 * ((1 + self.sh_degree) * (1 + self.sh_degree) - 1)
         got_sh_coeffs = scene_data["color_sh"].shape[-1]
         assert (
@@ -748,7 +710,15 @@ class RadFoamScene(torch.nn.Module):
         self.att_sh = nn.Parameter(
             scene_data["color_sh"].to(self.attr_dtype).to(self.device)
         )
-
+        
+        self.att_dc_density = nn.Parameter(
+            scene_data["color_dc_density"].to(self.attr_dtype).to(self.device)
+        )
+        self.att_sh_density = nn.Parameter(
+            scene_data["color_sh_density"].to(self.attr_dtype).to(self.device)
+        )
+        
+        
         self.point_adjacency = scene_data["adjacency"].to(self.device).to(
             torch.uint32)
         self.point_adjacency_offsets = scene_data["adjacency_offsets"].to(

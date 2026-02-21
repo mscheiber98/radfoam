@@ -95,6 +95,32 @@ __device__ void write_rgb_grad_to_sh(const Vecf<sh_dimension(degree)> &coeffs, /
     }
 }
 
+// spherical harmonics for density
+
+template <typename scalar, int degree>
+__device__ float load_sh_as_density(const Vecf<sh_dimension(degree)> &coeffs, //the coefficients (basis functions) for the view direction
+                                const scalar *sh_density_vals // the learned per-point SH coefficients stored in memory
+                            ) {
+    float density = 0.0;
+
+#pragma unroll
+    for (uint32_t i = 0; i < sh_dimension(degree); ++i) {
+        density += coeffs[i] * (float)sh_density_vals[i];
+    }
+
+    return density;
+}
+
+template <typename scalar, int degree>
+__device__ void write_density_grad_to_sh(const Vecf<sh_dimension(degree)> &coeffs, //the coefficients (basis functions) for the view direction
+                                     float grad_density, // gradient w.r.t the view dependent density
+                                     scalar *sh_density_grad // gradient w.r.t. the learned spherical harmonics coefficients
+                                    ) {
+    for (uint32_t i = 0; i < sh_dimension(degree); ++i) {
+        atomicAdd(sh_density_grad + i, (scalar)(coeffs[i] * grad_density));
+    }
+}
+
 template <typename attr_scalar, int sh_dim>
 __device__ Vec3<attr_scalar>
 forward_sh(uint32_t deg, Vec<attr_scalar, sh_dim> sh_vec, Vec3f dirs) {
