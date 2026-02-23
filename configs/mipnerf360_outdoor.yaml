@@ -6,7 +6,7 @@ activation_scale: 1
 device: cuda
 
 # Pipeline Parameters
-iterations: 20_000
+iterations: 5_000
 densify_from: 2_000
 densify_until: 11_000
 densify_factor: 1.15
@@ -18,8 +18,11 @@ debug: false                           # Flag to not use tensorboard
 # Optimization Parameters
 points_lr_init: 2e-4
 points_lr_final: 5e-6
+# VoD-3DGS suggests setting the new density learning rates to 1/4 of the original
 density_lr_init: 1e-1
 density_lr_final: 1e-2
+# density_lr_init: 0.025
+# density_lr_final: 0.0025
 attributes_lr_init: 5e-3
 attributes_lr_final: 5e-4
 sh_factor: 0.02

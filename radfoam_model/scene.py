@@ -338,8 +338,7 @@ class RadFoamScene(torch.nn.Module):
             # VOD PARAMETERS
             {
                 "params": self.sggx,
-                # use 1/4 of original density learning rate like in the VoD 3DGS paper
-                "lr": 0.25 * args.density_lr_init,
+                "lr": args.density_lr_init,
                 "name": "sggx",
             },
         ]
@@ -366,8 +365,7 @@ class RadFoamScene(torch.nn.Module):
             lr_final=args.sh_factor * args.attributes_lr_final,
             warmup_steps=max_iterations // 5,
             max_steps=max_iterations,
-        )
-        
+        )        
         # VOD PARAMETERS
         self.sggx_scheduler_args = get_cosine_lr_func(
             lr_init= args.density_lr_init,
@@ -390,8 +388,7 @@ class RadFoamScene(torch.nn.Module):
                 param_group["lr"] = lr
             elif param_group["name"] == "att_sh":
                 lr = self.attr_rest_scheduler_args(iteration)
-                param_group["lr"] = lr
-            
+                param_group["lr"] = lr            
             # VOD PARAMETERS
             elif param_group["name"] == "sggx":
                 lr = self.sggx_scheduler_args(iteration)
@@ -426,7 +423,6 @@ class RadFoamScene(torch.nn.Module):
         self.att_dc = optimizable_tensors["att_dc"]
         self.att_sh = optimizable_tensors["att_sh"]
         self.density = optimizable_tensors["density"]
-        
         # VOD PARAMETERS
         self.sggx = optimizable_tensors["sggx"]
 
@@ -480,8 +476,7 @@ class RadFoamScene(torch.nn.Module):
         self.primal_points = optimizable_tensors["primal_points"]
         self.att_dc = optimizable_tensors["att_dc"]
         self.att_sh = optimizable_tensors["att_sh"]
-        self.density = optimizable_tensors["density"]
-        
+        self.density = optimizable_tensors["density"]        
         # VOD PARAMETERS
         self.sggx = optimizable_tensors["sggx"]
 
@@ -543,8 +538,7 @@ class RadFoamScene(torch.nn.Module):
                 "primal_points": sampled_points,
                 "att_dc": self.att_dc[sampled_inds],
                 "att_sh": self.att_sh[sampled_inds],
-                "density": self.density[sampled_inds],
-                
+                "density": self.density[sampled_inds],                
                 # VOD PARAMETERS
                 "sggx": self.sggx[sampled_inds],
             }
@@ -637,7 +631,7 @@ class RadFoamScene(torch.nn.Module):
         b = np.array(
             np.clip(255 * (0.5 + C0 * color_attributes[:, 2]), 0, 255),
             dtype=np.uint8,
-        )
+                    )
         
         # VOD PARAMETERS
         sggx = self.get_primal_sggx().detach().float().cpu().numpy()
@@ -715,8 +709,7 @@ class RadFoamScene(torch.nn.Module):
             "color_dc": color_dc,
             "color_sh": color_sh,
             "adjacency": adjacency.long(),
-            "adjacency_offsets": adjacency_offsets.long(),
-            
+            "adjacency_offsets": adjacency_offsets.long(),            
             # VOD PARAMETERS
             "sggx": sggx,
         }
