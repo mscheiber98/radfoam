@@ -6,8 +6,8 @@ activation_scale: 1
 device: cuda
 
 # Pipeline Parameters
-iterations: 20_000
-densify_from: 2_000
+iterations: 5000
+densify_from: 2000
 densify_until: 11_000
 densify_factor: 1.15
 white_background: true
@@ -20,8 +20,8 @@ points_lr_init: 2e-4
 points_lr_final: 5e-6
 density_lr_init: 1e-1
 density_lr_final: 1e-2
-attributes_lr_init: 5e-3
-attributes_lr_final: 5e-4
+color_lr_init: 5e-3
+color_lr_final: 5e-4
 sh_factor: 0.02
 freeze_points: 18_000                  # Points are frozen after this cycle
 

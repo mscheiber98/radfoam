@@ -71,8 +71,8 @@ class OptimizationParams(ParamGroup):
         self.points_lr_final = 5e-6
         self.density_lr_init = 1e-1
         self.density_lr_final = 1e-2
-        self.attributes_lr_init = 5e-3
-        self.attributes_lr_final = 5e-4
+        self.color_lr_init = 5e-3
+        self.color_lr_final = 5e-4
         self.sh_factor = 0.1
         self.freeze_points = 18_000
         super().__init__(parser, "Setting Optimization parameters")

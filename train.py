@@ -238,15 +238,16 @@ def train(args, pipeline_args, model_args, optimizer_args, dataset_args):
                         "lr/points_lr", model.xyz_scheduler_args(i), i
                     )
                     writer.add_scalar(
-                        "lr/density_lr", model.den_scheduler_args(i), i
+                        "lr/color_dc_lr", model.color_dc_scheduler_args(i), i
                     )
                     writer.add_scalar(
-                        "lr/attr_lr", model.attr_dc_scheduler_args(i), i
+                        "lr/color_sh_lr", model.color_sh_scheduler_args(i), i
                     )
-                    
-                    # VOD PARAMETERS
                     writer.add_scalar(
-                        "lr/sggx_lr", model.sggx_scheduler_args(i),i
+                        "lr/density_dc_lr", model.density_dc_scheduler_args(i), i
+                    )
+                    writer.add_scalar(
+                        "lr/density_sh_lr", model.density_sh_scheduler_args(i), i
                     )
 
                 if iters_since_update >= triangulation_update_period:

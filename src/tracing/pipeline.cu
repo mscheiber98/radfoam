@@ -417,7 +417,7 @@ __global__ void backward(TraceSettings settings,
             attribute_grad + point_idx * attr_memory_size);
 
         float dL_ds = dL_ds_primal * d_softplus(s);
-        write_density_grad_to_sh<atttr_scalar, sh_degree>(
+        write_density_grad_to_sh<attr_scalar, sh_degree>(
             sh_coeffs,
             dL_ds,
             attribute_grad + point_idx * attr_memory_size + sh_dim_color);            
@@ -872,7 +872,7 @@ class CUDATracingPipeline : public Pipeline {
 
     // ADD VOD ATTRIBUTES
     uint32_t attribute_dim() const override {
-        return 1 + 4 * (1 + sh_degree) * (1 + sh_degree);
+        return 4 * (1 + sh_degree) * (1 + sh_degree);
     }
 
     ScalarType attribute_type() const override {

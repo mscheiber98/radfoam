@@ -165,7 +165,7 @@ inline __device__ float softplus(float x, float beta = 10.0f, float threshold = 
     }
 
     else {
-        return 1/beta * log1pf(expf(bx))
+        return 1/beta * log1pf(expf(bx));
     }
 }
 
