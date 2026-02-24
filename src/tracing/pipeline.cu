@@ -426,8 +426,8 @@ __global__ void backward(TraceSettings settings,
         float dL_dvod = dL_ddensity * s;
 
         Vec3f dL_dnormal = dL_dvod *  ray.direction;
-        Vec3f dL_dunnorm = (dL_dnormal / unnorm.norm()) * 
-                   (ray.direction - normal.dot(ray.direction) * normal);
+        float dot_product = normal.dot(dL_dnormal);
+        Vec3f dL_dunnorm = (dL_dnormal - dot_product*normal)/unnorm.norm();
         float dL_dx = dL_dunnorm.x();
         float dL_dy = dL_dunnorm.y(); 
         float dL_dz = dL_dunnorm.z();
