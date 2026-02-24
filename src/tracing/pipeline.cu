@@ -93,7 +93,7 @@ __global__ void forward(TraceSettings settings,
 
         load_attributes(point_idx, rgb_primal, s, n);
         
-        n /= n.norm()
+        n /= n.norm();
         float vod = ray.direction.dot(n);
         float s_primal = softplus(s * vod);
 
@@ -260,12 +260,12 @@ __global__ void backward(TraceSettings settings,
             Vec3f normal_tmp;
             Vec3f rgb_tmp;
 
-            load_attributes(point_idx, rgb_tmp, s_tmp, normal_dim);
+            load_attributes(point_idx, rgb_tmp, s_tmp, normal_tmp);
 
             normal_tmp/= normal_tmp.norm();
             float vod_tmp = ray.direction.dot(normal_tmp);
 
-            current_depth_grad += ray_depth_grad[i] / softplus(s * vod);
+            current_depth_grad += ray_depth_grad[i] / softplus(s_tmp * vod_tmp);
         }
     }
 
@@ -622,7 +622,9 @@ __global__ void benchmark(TraceSettings settings,
         return;
 
     constexpr int sh_dim = 3 * (1 + sh_degree) * (1 + sh_degree);
-    constexpr int attr_memory_size = 1 + sh_dim + 6;
+    constexpr int density_dim = 1;
+    constexpr int normal_dim = 3;
+    constexpr int attr_memory_size = sh_dim + density_dim + normal_dim;
 
     Ray ray = cast_ray(camera, pix_i, pix_j);
     if (ray.direction.norm() < 0.1f) {
