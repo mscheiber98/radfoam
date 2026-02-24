@@ -65,6 +65,8 @@ __global__ void forward(TraceSettings settings,
             rgb = load_sh_as_rgb<attr_scalar, sh_degree>(sh_coeffs, attr_ptr);
         } else {
             rgb = Vec3f::Zero();
+            rgb = load_sh_as_rgb<attr_scalar, sh_degree>(sh_coeffs, attr_ptr);
+
         }
         const float normal_x = (float)attr_ptr[attr_memory_size - (normal_dim)];
         const float normal_y = (float)attr_ptr[attr_memory_size - (normal_dim + 1)];
@@ -220,6 +222,8 @@ __global__ void backward(TraceSettings settings,
             rgb = load_sh_as_rgb<attr_scalar, sh_degree>(sh_coeffs, attr_ptr);
         } else {
             rgb = Vec3f::Zero();
+            rgb = load_sh_as_rgb<attr_scalar, sh_degree>(sh_coeffs, attr_ptr);
+
         }
         const float normal_x = (float)attr_ptr[attr_memory_size - (normal_dim)];
         const float normal_y = (float)attr_ptr[attr_memory_size - (normal_dim + 1)];
@@ -507,6 +511,8 @@ visualization(TraceSettings settings,
             rgb = load_sh_as_rgb<attr_scalar, sh_degree>(sh_coeffs, attr_ptr);
         } else {
             rgb = Vec3f::Zero();
+            rgb = load_sh_as_rgb<attr_scalar, sh_degree>(sh_coeffs, attr_ptr);
+
         }
         const float normal_x = (float)attr_ptr[attr_memory_size - (normal_dim)];
         const float normal_y = (float)attr_ptr[attr_memory_size - (normal_dim + 1)];
