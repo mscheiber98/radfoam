@@ -101,7 +101,7 @@ template <typename scalar, int degree>
 __device__ float load_sh_as_density(const Vecf<sh_dimension(degree)> &coeffs, //the coefficients (basis functions) for the view direction
                                 const scalar *sh_density_vals // the learned per-point SH coefficients stored in memory
                             ) {
-    float density = 0.5;
+    float density = 0.0;
 
 #pragma unroll
     for (uint32_t i = 0; i < sh_dimension(degree); ++i) {
