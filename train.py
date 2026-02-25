@@ -57,9 +57,6 @@ def density_smoothness_loss_vectorized(density_dc,
                                        point_adjacency,
                                        point_adjacency_offsets,
                                        weight=1.0):
-    """
-    Vectorized version of smoothness loss computation.
-    """
     # Convert to long for indexing
     point_adjacency = point_adjacency.long()
     point_adjacency_offsets = point_adjacency_offsets.long()
@@ -277,7 +274,7 @@ def train(args, pipeline_args, model_args, optimizer_args, dataset_args):
                     2 * i / pipeline_args.iterations, 1
                 )
 
-                density_smoothness = density_smoothness_loss(model.density_dc, model.density_sh, model.point_adjacency, model.point_adjacency_offsets)
+                density_smoothness = density_smoothness_loss_vectorized(model.density_dc, model.density_sh, model.point_adjacency, model.point_adjacency_offsets)
 
                 loss = color_loss.mean() + opacity_loss + w_depth * quant_loss +  density_smoothness
 
