@@ -51,6 +51,51 @@ def density_smoothness_loss(density_dc, density_sh, point_adjacency, point_adjac
 
     else:
         return torch.tensor(0.0)
+    
+def density_smoothness_loss_vectorized(density_dc,
+                                       density_sh,
+                                       point_adjacency,
+                                       point_adjacency_offsets,
+                                       weight=1.0):
+    """
+    Vectorized version of smoothness loss computation.
+    """
+    # Convert to long for indexing
+    point_adjacency = point_adjacency.long()
+    point_adjacency_offsets = point_adjacency_offsets.long()
+    
+    # Concatenate density parameters
+    density_feat = torch.cat([density_dc, density_sh], dim=-1)  # [num_points, D]
+    num_points = density_feat.shape[0]
+    
+    # Build lists of (point_idx, neighbor_idx) pairs
+    point_indices = []
+    neighbor_indices = []
+    
+    for i in range(num_points):
+        start_idx = point_adjacency_offsets[i].item()
+        end_idx = point_adjacency_offsets[i + 1].item()
+        neighbors = point_adjacency[start_idx:end_idx]
+        
+        if len(neighbors) > 0:
+            point_indices.extend([i] * len(neighbors))
+            neighbor_indices.extend(neighbors.tolist())
+    
+    if len(point_indices) == 0:
+        return torch.tensor(0.0, device=density_feat.device, dtype=density_feat.dtype)
+    
+    # Convert to tensors
+    point_indices = torch.tensor(point_indices, device=density_feat.device, dtype=torch.long)
+    neighbor_indices = torch.tensor(neighbor_indices, device=density_feat.device, dtype=torch.long)
+    
+    # Compute differences
+    point_feat = density_feat[point_indices]  # [num_pairs, D]
+    neighbor_feat = density_feat[neighbor_indices]  # [num_pairs, D]
+    
+    diff = point_feat - neighbor_feat
+    squared_diff = (diff ** 2).sum(dim=-1)  # [num_pairs]
+    
+    return weight * squared_diff.mean()
 
 
 def train(args, pipeline_args, model_args, optimizer_args, dataset_args):
