@@ -25,6 +25,33 @@ seed = 42
 torch.random.manual_seed(seed)
 np.random.seed(seed)
 
+def density_smoothness_loss(density_dc, density_sh, point_adjacency, point_adjacency_offsets, weight=1.0):
+    density = torch.cat([density_dc, density_sh], dim =-1)
+    num_points = density.shape[0]
+
+    point_adjacency = point_adjacency.long()
+    point_adjacency_offsets = point_adjacency_offsets.long()
+
+    total_loss = 0.0
+    count = 0
+
+    for i in range(num_points):
+        start_idx = point_adjacency_offsets[i]
+        end_idx = point_adjacency_offsets[i + 1]
+        neighbours = point_adjacency[start_idx:end_idx]
+
+        if len(neighbours) > 0:
+            neighbour_densities = density[neighbours]
+            diff = density[i] - neighbour_densities
+            squared_diff = (diff **2).sum()
+            count += len(neighbours)
+
+    if count > 0:
+        return weight * (total_loss / count)
+
+    else:
+        return torch.tensor(0.0)
+
 
 def train(args, pipeline_args, model_args, optimizer_args, dataset_args):
     device = torch.device(model_args.device)
@@ -205,7 +232,9 @@ def train(args, pipeline_args, model_args, optimizer_args, dataset_args):
                     2 * i / pipeline_args.iterations, 1
                 )
 
-                loss = color_loss.mean() + opacity_loss + w_depth * quant_loss
+                density_smoothness = density_smoothness_loss(model.density_dc, model.density_sh, model.point_adjacency, model.point_adjacency_offsets)
+
+                loss = color_loss.mean() + opacity_loss + w_depth * quant_loss +  density_smoothness
 
                 model.optimizer.zero_grad(set_to_none=True)
 
