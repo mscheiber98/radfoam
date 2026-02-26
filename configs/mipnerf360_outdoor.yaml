@@ -6,8 +6,8 @@ activation_scale: 1
 device: cuda
 
 # Pipeline Parameters
-iterations: 5_000
-densify_from: 2_000
+iterations: 3_000
+densify_from: 1_000
 densify_until: 11_000
 densify_factor: 1.15
 white_background: true

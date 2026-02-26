@@ -180,8 +180,6 @@ class RadFoamScene(torch.nn.Module):
         self.density = optimizable_tensors["density"]
         self.att_dc = optimizable_tensors["att_dc"]
         self.att_sh = optimizable_tensors["att_sh"]
-        
-        #ALSO HERE VOD PARAMETERS
         self.sggx = optimizable_tensors["sggx"]
 
     # build the triangulation and auxiliarry data structure (aabb tree and adjacency data)
@@ -389,7 +387,6 @@ class RadFoamScene(torch.nn.Module):
             elif param_group["name"] == "att_sh":
                 lr = self.attr_rest_scheduler_args(iteration)
                 param_group["lr"] = lr            
-            # VOD PARAMETERS
             elif param_group["name"] == "sggx":
                 lr = self.sggx_scheduler_args(iteration)
                 param_group["lr"] = lr
@@ -518,6 +515,7 @@ class RadFoamScene(torch.nn.Module):
             primal_contribution_accum = point_contribution.squeeze()
             mask = primal_contribution_accum < 1e-3
             self.density[mask] = -1
+            self.sggx.data[mask] = 0
 
             perturbation = 0.25 * (points[farthest_neighbor] - points)
             delta = torch.randn_like(perturbation)
@@ -539,7 +537,6 @@ class RadFoamScene(torch.nn.Module):
                 "att_dc": self.att_dc[sampled_inds],
                 "att_sh": self.att_sh[sampled_inds],
                 "density": self.density[sampled_inds],                
-                # VOD PARAMETERS
                 "sggx": self.sggx[sampled_inds],
             }
 
@@ -632,8 +629,6 @@ class RadFoamScene(torch.nn.Module):
             np.clip(255 * (0.5 + C0 * color_attributes[:, 2]), 0, 255),
             dtype=np.uint8,
                     )
-        
-        # VOD PARAMETERS
         sggx = self.get_primal_sggx().detach().float().cpu().numpy()
 
         vertex_data = []
@@ -652,8 +647,6 @@ class RadFoamScene(torch.nn.Module):
                         color_attributes[i, 3 + j]
                         for j in range(color_attributes.shape[1] - 3)
                     ],
-                    
-                    # VOD PARAMETERS
                     sggx[i, 0],
                     sggx[i, 1],
                     sggx[i, 2],
@@ -672,17 +665,17 @@ class RadFoamScene(torch.nn.Module):
             ("blue", np.uint8),
             ("density", np.float32),
             ("adjacency_offset", np.uint32),
-            # VOD PARAMETERS
-            ("sxx", np.float32),
-            ("sxy", np.float32),
-            ("sxz", np.float32),
-            ("syy", np.float32),
-            ("syz", np.float32),
-            ("szz", np.float32),
         ]
 
         for i in range(self.att_sh.shape[1]):
             dtype.append(("color_sh_{}".format(i), np.float32))
+        
+        dtype.append(("sxx", np.float32))
+        dtype.append(("sxy", np.float32))
+        dtype.append(("sxz", np.float32))
+        dtype.append(("syy", np.float32))
+        dtype.append(("syz", np.float32))
+        dtype.append(("szz", np.float32))
 
         vertex_data = np.array(vertex_data, dtype=dtype)
         vertex_element = PlyElement.describe(vertex_data, "vertex")
@@ -699,8 +692,6 @@ class RadFoamScene(torch.nn.Module):
         color_sh = self.att_sh.detach().float().cpu()
         adjacency = self.point_adjacency.cpu()
         adjacency_offsets = self.point_adjacency_offsets.cpu()
-
-        # VOD PARAMETERS
         sggx = self.get_primal_sggx().detach().float().cpu()
 
         scene_data = {
@@ -710,7 +701,6 @@ class RadFoamScene(torch.nn.Module):
             "color_sh": color_sh,
             "adjacency": adjacency.long(),
             "adjacency_offsets": adjacency_offsets.long(),            
-            # VOD PARAMETERS
             "sggx": sggx,
         }
         torch.save(scene_data, pt_path)
