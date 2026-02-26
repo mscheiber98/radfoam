@@ -66,9 +66,9 @@ class RadFoamScene(torch.nn.Module):
         
         ## NOW THE SAME FOR DENSITY
         self.density_dc = nn.Parameter(
-            torch.full(
-                (self.num_init_points, 1),
-                0.0,
+            torch.zeros(
+                self.num_init_points,
+                1,
                 device=self.device,
                 dtype=self.attr_dtype,
             )
@@ -482,8 +482,8 @@ class RadFoamScene(torch.nn.Module):
             primal_contribution_accum = point_contribution.squeeze()
             mask = primal_contribution_accum < 1e-3
             # self.density[mask] = -1
-            #self.density_dc[mask] = -1
-            #self.density_sh[mask] = -1
+            self.density_dc.data[mask] = 0
+            self.density_sh.data[mask] = 0
 
             perturbation = 0.25 * (points[farthest_neighbor] - points)
             delta = torch.randn_like(perturbation)

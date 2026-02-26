@@ -274,9 +274,15 @@ def train(args, pipeline_args, model_args, optimizer_args, dataset_args):
                     2 * i / pipeline_args.iterations, 1
                 )
 
-                density_smoothness = density_smoothness_loss_vectorized(model.density_dc, model.density_sh, model.point_adjacency, model.point_adjacency_offsets)
+                # if i > 1000:
+                #     density_smoothness = density_smoothness_loss_vectorized(model.density_dc, model.density_sh, model.point_adjacency, model.point_adjacency_offsets, weight=0.002)
+                #     loss = color_loss.mean() + opacity_loss + w_depth * quant_loss +  density_smoothness
 
-                loss = color_loss.mean() + opacity_loss + w_depth * quant_loss +  density_smoothness
+                # else:
+                #     loss = color_loss.mean() + opacity_loss + w_depth * quant_loss
+
+                loss = color_loss.mean() + opacity_loss + w_depth * quant_loss
+
 
                 model.optimizer.zero_grad(set_to_none=True)
 
