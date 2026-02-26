@@ -89,7 +89,7 @@ class RadFoamScene(torch.nn.Module):
         )
         self.density = nn.Parameter(density[perm])
 
-        normal = torch.tensor([0.0, 1.0, 0.0],dtype=self.attr_dtype).to(self.device)
+        normal = torch.rand(3, self.init_points,dtype=self.attr_dtype).to(self.device)
         normal = normal.repeat(self.num_init_points, 1)
         self.normal = nn.Parameter(normal[perm])
         
@@ -123,8 +123,8 @@ class RadFoamScene(torch.nn.Module):
                 dim=0,
             ).to(self.device)
             self.num_init_points = primal_points.shape[0]
-            normal = torch.tensor([0.0, 1.0, 0.0],dtype=self.attr_dtype).to(self.device)
-            normal = normal.repeat(self.num_init_points, 1)
+            normal = torch.rand(self.num_init_points,3,dtype=self.attr_dtype).to(self.device)
+            # normal = normal.repeat(self.num_init_points, 1)
             
             # build the triangulation
             self.triangulation = radfoam.Triangulation(primal_points)

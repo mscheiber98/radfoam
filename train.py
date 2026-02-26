@@ -25,6 +25,45 @@ seed = 42
 torch.random.manual_seed(seed)
 np.random.seed(seed)
 
+def density_smoothness_loss_vectorized(normal,
+                                       point_adjacency,
+                                       point_adjacency_offsets,
+                                       weight=1.0):
+    # Convert to long for indexing
+    point_adjacency = point_adjacency.long()
+    point_adjacency_offsets = point_adjacency_offsets.long()
+    
+    num_points = normal.shape[0]
+    
+    # Build lists of (point_idx, neighbor_idx) pairs
+    point_indices = []
+    neighbor_indices = []
+    
+    for i in range(num_points):
+        start_idx = point_adjacency_offsets[i].item()
+        end_idx = point_adjacency_offsets[i + 1].item()
+        neighbors = point_adjacency[start_idx:end_idx]
+        
+        if len(neighbors) > 0:
+            point_indices.extend([i] * len(neighbors))
+            neighbor_indices.extend(neighbors.tolist())
+    
+    if len(point_indices) == 0:
+        return torch.tensor(0.0, device=normal.device, dtype=normal.dtype)
+    
+    # Convert to tensors
+    point_indices = torch.tensor(point_indices, device=normal.device, dtype=torch.long)
+    neighbor_indices = torch.tensor(neighbor_indices, device=normal.device, dtype=torch.long)
+    
+    # Compute differences
+    point_feat = normal[point_indices]  # [num_pairs, D]
+    neighbor_feat = normal[neighbor_indices]  # [num_pairs, D]
+    
+    diff = point_feat - neighbor_feat
+    squared_diff = (diff ** 2).sum(dim=-1)  # [num_pairs]
+    
+    return weight * squared_diff.mean()
+
 
 def train(args, pipeline_args, model_args, optimizer_args, dataset_args):
     device = torch.device(model_args.device)
@@ -205,7 +244,12 @@ def train(args, pipeline_args, model_args, optimizer_args, dataset_args):
                     2 * i / pipeline_args.iterations, 1
                 )
 
-                loss = color_loss.mean() + opacity_loss + w_depth * quant_loss
+                if i > 300:
+                    density_smoothness = density_smoothness_loss_vectorized(model.normal, model.point_adjacency, model.point_adjacency_offsets)
+                    loss = color_loss.mean() + opacity_loss + w_depth * quant_loss + density_smoothness
+
+                else:
+                    loss = color_loss.mean() + opacity_loss + w_depth * quant_loss
 
                 model.optimizer.zero_grad(set_to_none=True)
 
