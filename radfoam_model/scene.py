@@ -89,8 +89,7 @@ class RadFoamScene(torch.nn.Module):
         )
         self.density = nn.Parameter(density[perm])
 
-        normal = torch.rand(3, self.init_points,dtype=self.attr_dtype).to(self.device)
-        normal = normal.repeat(self.num_init_points, 1)
+        normal = torch.rand(self.num_init_points,3,dtype=self.attr_dtype).to(self.device)
         self.normal = nn.Parameter(normal[perm])
         
         # we call this to build the AABB tree and the point adjacency data
