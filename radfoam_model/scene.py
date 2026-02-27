@@ -95,7 +95,8 @@ class RadFoamScene(torch.nn.Module):
         density = torch.zeros(
             self.num_init_points, 1, device=self.device, dtype=self.attr_dtype
         )
-        sggx = torch.zeros(self.num_init_points, 6, device=self.device)
+        sggx = torch.tensor([1.0, 0.0, 0.0, 1.0, 0.0, 1.0],dtype=self.attr_dtype).to(self.device)
+        sggx = sggx.repeat(self.num_init_points, 1)
         
         self.density = nn.Parameter(density[perm])
         self.sggx = nn.Parameter(sggx[perm])
